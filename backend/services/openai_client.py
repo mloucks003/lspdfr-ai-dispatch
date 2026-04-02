@@ -225,10 +225,29 @@ class OpenAIRealtimeClient:
             # Forward audio delta to radio
             audio_data = message.get("delta", "")
             if audio_data:
+                logger.debug("Forwarding audio chunk to radio (%d bytes b64)", len(audio_data))
                 await self._hub.send_to("radio", {
                     "type": "audio_response",
                     "data": audio_data,
                 })
+
+        elif msg_type == "response.audio.done":
+            logger.info("OpenAI audio response complete")
+
+        elif msg_type == "response.audio_transcript.delta":
+            # Log what the dispatcher is saying
+            text = message.get("delta", "")
+            if text:
+                print(f"  📻 Dispatcher: {text}", end="", flush=True)
+
+        elif msg_type == "response.audio_transcript.done":
+            print()  # newline after transcript
+
+        elif msg_type == "input_audio_buffer.speech_started":
+            logger.info("OpenAI detected speech start")
+
+        elif msg_type == "input_audio_buffer.speech_stopped":
+            logger.info("OpenAI detected speech end")
 
         elif msg_type == "response.function_call_arguments.done":
             await self._handle_function_call(message)

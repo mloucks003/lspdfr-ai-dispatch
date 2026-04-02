@@ -47,7 +47,7 @@ def load_config():
             "Port": "8000",
         }
         config["Audio"] = {
-            "SilenceTimeout": "3.0",
+            "SilenceTimeout": "4.0",
             "WakeWord": "dispatch",
         }
         with open(CONFIG_FILE, "w") as f:
@@ -253,13 +253,18 @@ def run_dispatch_radio(port: int, api_key: str, wake_word: str, silence_timeout:
             if n_samples > 0:
                 samples = struct.unpack(f"<{n_samples}h", data[:n_samples * 2])
                 rms = (sum(s * s for s in samples) / n_samples) ** 0.5
-                if rms > 500:
+                if rms > 300:  # Lower threshold to keep session alive
                     last_voice_time = time.monotonic()
 
             if time.monotonic() - last_voice_time > silence_timeout:
                 state = STATE_PASSIVE
                 logger.info("🔇 PASSIVE — Silence timeout. Waiting for '%s'...", wake_word)
                 recognizer.Reset()
+                # Send a commit signal so OpenAI processes what it has
+                try:
+                    ws_send.send('{"type":"audio_chunk","data":""}')
+                except:
+                    pass
 
 
 def main():
@@ -273,7 +278,7 @@ def main():
     openai_key = general.get("OpenAIApiKey", "")
     api_key = general.get("ApiKey", "dispatch-secret")
     wake_word = audio_cfg.get("WakeWord", "dispatch")
-    silence_timeout = float(audio_cfg.get("SilenceTimeout", "3.0"))
+    silence_timeout = float(audio_cfg.get("SilenceTimeout", "4.0"))
 
     port_str = str(port)
     openai_status = "Configured" if openai_key else "NOT SET — edit config.ini"
