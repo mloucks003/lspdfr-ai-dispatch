@@ -1,0 +1,31 @@
+version: "3.8"
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: lspdfr-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: lspdfr-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DISPATCH_MONGODB_URI=mongodb://mongodb:27017
+      - DISPATCH_MONGODB_DATABASE=lspdfr_dispatch
+      - DISPATCH_API_KEY=changeme
+      - DISPATCH_OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DISPATCH_DEFAULT_CALLSIGN=1-Adam-12
+    depends_on:
+      - mongodb
+    restart: unless-stopped
+
+volumes:
+  mongo_data:

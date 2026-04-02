@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>LSPDFRDispatch</AssemblyName>
+    <RootNamespace>LSPDFRDispatch</RootNamespace>
+    <OutputType>Library</OutputType>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <!-- 
+    Place RagePluginHook.dll and LSPDFR.dll in the plugin/lib/ folder.
+    Copy them from your GTA V installation:
+      - GTA V/RagePluginHook.dll
+      - GTA V/Plugins/LSPD First Response/LSPD First Response.dll
+  -->
+  <ItemGroup>
+    <Reference Include="RagePluginHook">
+      <HintPath>lib\RagePluginHook.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="LSPD First Response">
+      <HintPath>lib\LSPD First Response.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+</Project>
