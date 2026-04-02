@@ -112,13 +112,8 @@ namespace LSPDFRDispatch
 
         public string GetLandmark(Vector3 position)
         {
-            try
-            {
-                string zone = World.GetZoneName(
-                    new Rage.Vector3(position.X, position.Y, position.Z));
-                return (!string.IsNullOrEmpty(zone) && zone != "UNK") ? zone : null;
-            }
-            catch { return null; }
+            // Zone names not available via World helper in this RPH version
+            return null;
         }
 
         public int GetWantedLevel(int pedHandle)
