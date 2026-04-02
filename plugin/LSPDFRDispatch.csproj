@@ -9,14 +9,8 @@
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
 
-  <!-- 
-    Place RagePluginHook.dll and LSPDFR.dll in the plugin/lib/ folder.
-    Copy them from your GTA V installation:
-      - GTA V/RagePluginHook.dll
-      - GTA V/Plugins/LSPD First Response/LSPD First Response.dll
-  -->
   <ItemGroup>
-    <Reference Include="RagePluginHook">
+    <Reference Include="RagePluginHookSDK">
       <HintPath>lib\RagePluginHook.dll</HintPath>
       <Private>False</Private>
     </Reference>
