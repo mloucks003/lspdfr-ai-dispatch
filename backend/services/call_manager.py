@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from backend.models.enums import CallStatus
-from backend.services.database import DatabaseService
+from backend.services import DatabaseService
 from backend.ws.hub import WebSocketHub
 
 logger = logging.getLogger(__name__)

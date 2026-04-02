@@ -3,7 +3,10 @@
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from bson import ObjectId
+try:
+    from bson import ObjectId
+except ImportError:
+    ObjectId = None
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
@@ -96,10 +99,10 @@ async def create_warrant(body: WarrantCreateIn):
 @router.put("/{warrant_id}/serve", response_model=Warrant)
 async def serve_warrant(warrant_id: str):
     """Mark a warrant as served (Req 12.6)."""
-    if not ObjectId.is_valid(warrant_id):
+    if ObjectId is not None and not ObjectId.is_valid(warrant_id):
         raise HTTPException(status_code=400, detail="Invalid warrant ID")
 
-    oid = ObjectId(warrant_id)
+    oid = warrant_id
     db = _get_db_service()
 
     result = await db.audited_update(

@@ -13,7 +13,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 from backend.models.enums import LicenseStatus
-from backend.services.database import DatabaseService
+from backend.services import DatabaseService
 
 logger = logging.getLogger(__name__)
 

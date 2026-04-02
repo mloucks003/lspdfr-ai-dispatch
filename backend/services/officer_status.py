@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from backend.models.enums import CallStatus
-from backend.services.database import DatabaseService
+from backend.services import DatabaseService
 from backend.ws.hub import WebSocketHub
 
 logger = logging.getLogger(__name__)
@@ -97,10 +97,9 @@ class OfficerStatusService:
         Raises:
             ValueError: If the call is not found.
         """
-        from bson import ObjectId
-
+        # Accept string IDs directly (SQLite mode uses string IDs)
         if isinstance(call_id, str):
-            call_id = ObjectId(call_id)
+            pass  # already a string, which works for both backends
 
         now = datetime.now(timezone.utc)
 

@@ -9,7 +9,7 @@ import logging
 from typing import Any, Dict, List
 
 from backend.models.enums import WarrantStatus
-from backend.services.database import DatabaseService
+from backend.services import DatabaseService
 
 logger = logging.getLogger(__name__)
 

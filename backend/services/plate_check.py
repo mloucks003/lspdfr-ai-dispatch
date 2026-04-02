@@ -10,7 +10,7 @@ import logging
 import re
 from typing import Any, Dict
 
-from backend.services.database import DatabaseService
+from backend.services import DatabaseService
 
 logger = logging.getLogger(__name__)
 

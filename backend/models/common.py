@@ -3,7 +3,16 @@
 from datetime import datetime
 from typing import Annotated, Any, Optional
 
-from bson import ObjectId
+try:
+    from bson import ObjectId
+except ImportError:
+    # When running without MongoDB (SQLite mode), provide a minimal ObjectId stub
+    class ObjectId(str):
+        @staticmethod
+        def is_valid(v):
+            return isinstance(v, str) and len(v) >= 12
+        def __init__(self, v=None):
+            pass
 from pydantic import BaseModel, BeforeValidator, Field, PlainSerializer
 
 

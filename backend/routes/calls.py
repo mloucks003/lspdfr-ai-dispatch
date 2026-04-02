@@ -3,7 +3,10 @@
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from bson import ObjectId
+try:
+    from bson import ObjectId
+except ImportError:
+    ObjectId = None
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -13,7 +16,18 @@ from backend.models.enums import CallStatus
 router = APIRouter(prefix="/api/calls", tags=["calls"])
 
 
-def _get_db_service():
+def _valid_id(call_id: str) -> bool:
+    """Check if a call ID looks valid."""
+    if ObjectId is not None:
+        return ObjectId.is_valid(call_id)
+    return bool(call_id and len(call_id) >= 8)
+
+
+def _to_id(call_id: str):
+    """Convert string to the appropriate ID type."""
+    if ObjectId is not None:
+        return ObjectId(call_id)
+    return call_id
     """Lazy import to avoid circular dependency with backend.main."""
     from backend.main import db_service
     return db_service
@@ -55,11 +69,11 @@ async def list_active_calls():
 @router.get("/{call_id}", response_model=CADCall)
 async def get_call(call_id: str):
     """Return a single call by its ObjectId."""
-    if not ObjectId.is_valid(call_id):
+    if not _valid_id(call_id):
         raise HTTPException(status_code=400, detail="Invalid call ID")
 
     db = _get_db_service()
-    doc = await db.db.calls.find_one({"_id": ObjectId(call_id)})
+    doc = await db.db.calls.find_one({"_id": _to_id(call_id)})
     if doc is None:
         raise HTTPException(status_code=404, detail="Call not found")
     return CADCall(**doc)
@@ -68,10 +82,10 @@ async def get_call(call_id: str):
 @router.put("/{call_id}", response_model=CADCall)
 async def update_call(call_id: str, body: CallUpdateIn):
     """Update call notes and/or disposition."""
-    if not ObjectId.is_valid(call_id):
+    if not _valid_id(call_id):
         raise HTTPException(status_code=400, detail="Invalid call ID")
 
-    oid = ObjectId(call_id)
+    oid = _to_id(call_id)
     db = _get_db_service()
 
     set_fields: dict = {"updated_at": datetime.now(timezone.utc)}
@@ -109,3 +123,4 @@ async def update_call(call_id: str, body: CallUpdateIn):
 
     doc = await db.db.calls.find_one({"_id": oid})
     return CADCall(**doc)
+

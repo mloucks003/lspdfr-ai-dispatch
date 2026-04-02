@@ -14,13 +14,7 @@ from backend.config import settings
 from backend.services.bolo_service import BOLOService
 from backend.services.call_manager import CallManager
 from backend.services.criminal_history import CriminalHistoryService
-from backend.config import settings as _settings
-
-# Use SQLite by default (zero install), MongoDB if configured
-if _settings.db_backend == "mongodb":
-    from backend.services.database import DatabaseService
-else:
-    from backend.services.database_sqlite import DatabaseService
+from backend.services import DatabaseService
 from backend.services.function_registry import FunctionRegistry
 from backend.services.game_state import GameStateService
 from backend.services.name_check import NameCheckService
