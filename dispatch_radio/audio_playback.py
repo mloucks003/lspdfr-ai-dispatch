@@ -25,6 +25,9 @@ CLICK_OFF_DURATION = 0.05  # 50 ms click-off burst
 CLICK_AMPLITUDE = 12000    # amplitude for click bursts
 STATIC_AMPLITUDE = 1500    # amplitude for background static
 
+# OpenAI Realtime API sends audio at 24kHz
+PLAYBACK_RATE = 24000
+
 # How long to wait for more chunks before considering the response complete
 RESPONSE_GAP_TIMEOUT = 0.4  # 400ms of no new chunks = response is done
 
@@ -78,7 +81,7 @@ class AudioPlayback:
         self,
         pyaudio_instance: object | None = None,
         apply_squelch: bool = True,
-        rate: int = RATE,
+        rate: int = PLAYBACK_RATE,
     ) -> None:
         self._pa = pyaudio_instance
         self._apply_squelch = apply_squelch
