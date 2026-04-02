@@ -18,6 +18,7 @@
       <HintPath>lib\LSPD First Response.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="Microsoft.CSharp" />
   </ItemGroup>
 
   <ItemGroup>
