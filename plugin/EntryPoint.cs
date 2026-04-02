@@ -2,9 +2,11 @@ using System;
 using System.Threading;
 using LSPD_First_Response.Mod.API;
 using Rage;
+using Rage.Attributes;
 
 namespace LSPDFRDispatch
 {
+    [Plugin("LSPDFR Dispatch", Description = "AI-powered police dispatch system", Author = "LSPDFRDispatch")]
     public class EntryPoint : Plugin
     {
         private WebSocketTransport _transport;
