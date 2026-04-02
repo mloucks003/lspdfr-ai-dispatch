@@ -99,10 +99,18 @@ def start_dispatch_radio(config, port: int):
 
     playback = AudioPlayback(apply_squelch=True)
 
+    # Track when audio is playing to suppress wake word detection
+    is_playing = [False]
+
+    def on_audio_response(pcm):
+        is_playing[0] = True
+        playback.play(pcm)
+        # Reset after a short delay (the _watch_for_end thread handles this)
+
     ws_client = RadioWebSocketClient(
         backend_url=backend_url,
         api_key=api_key,
-        on_audio_response=lambda pcm: playback.play(pcm),
+        on_audio_response=on_audio_response,
         on_call_announcement=lambda call: logger.info(
             "DISPATCH: %s at %s (Priority %s)",
             call.get("type", "?"), call.get("location", {}).get("street", "?"),
@@ -115,16 +123,22 @@ def start_dispatch_radio(config, port: int):
 
     session = SessionManager(
         silence_timeout=silence_timeout,
-        on_session_start=lambda: ws_client.send_status_update("active"),
-        on_session_end=lambda: ws_client.send_status_update("listening"),
+        on_session_start=lambda: (logger.info("🎙️  ACTIVE — Listening..."), ws_client.send_status_update("active")),
+        on_session_end=lambda: (logger.info("🔇 PASSIVE — Waiting for wake word..."), ws_client.send_status_update("listening")),
     )
 
     detector = SimpleEnergyWakeWordDetector(threshold=wake_threshold)
 
     def on_wake_word(chunk):
+        # Don't trigger if dispatcher audio is playing back
+        if playback._started_response:
+            return
         session.activate()
 
     def on_audio_chunk(chunk):
+        # Don't send our own playback audio back to OpenAI
+        if playback._started_response:
+            return
         if session.state == SessionState.ACTIVE:
             ws_client.send_audio_chunk(chunk)
             session.feed_audio(chunk)
