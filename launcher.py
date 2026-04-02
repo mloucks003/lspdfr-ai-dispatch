@@ -151,14 +151,16 @@ def main():
     callsign = general.get("OfficerCallsign", "1-Adam-12")
     openai_key = general.get("OpenAIApiKey", "")
 
+    port_str = str(port)
+    openai_status = "Configured" if openai_key else "NOT SET — edit config.ini"
     print(f"""
  ╔══════════════════════════════════════════════╗
  ║      LSPDFR AI Dispatch Radio v{VERSION}        ║
  ║                                              ║
  ║  Callsign:  {callsign:<32s} ║
- ║  Backend:   http://127.0.0.1:{port:<15s} ║
- ║  CAD:       http://127.0.0.1:{port:<15s} ║
- ║  OpenAI:    {"Configured" if openai_key else "NOT SET — edit config.ini":<32s} ║
+ ║  Backend:   http://127.0.0.1:{port_str:<15s} ║
+ ║  CAD:       http://127.0.0.1:{port_str:<15s} ║
+ ║  OpenAI:    {openai_status:<32s} ║
  ║                                              ║
  ║  Say "dispatch" to talk to your dispatcher.  ║
  ║  Open the CAD URL in your browser.           ║
