@@ -107,6 +107,7 @@ from backend.routes.cad_static import router as cad_router  # noqa: E402
 from backend.routes.calls import router as calls_router  # noqa: E402
 from backend.routes.citations import router as citations_router  # noqa: E402
 from backend.routes.persons import router as persons_router  # noqa: E402
+from backend.routes.plugin_api import router as plugin_api_router  # noqa: E402
 from backend.routes.vehicles import router as vehicles_router  # noqa: E402
 from backend.routes.warrants import router as warrants_router  # noqa: E402
 from backend.ws.endpoints import router as ws_router  # noqa: E402
@@ -114,6 +115,7 @@ from backend.ws.endpoints import router as ws_router  # noqa: E402
 app.include_router(calls_router)
 app.include_router(citations_router)
 app.include_router(persons_router)
+app.include_router(plugin_api_router)
 app.include_router(vehicles_router)
 app.include_router(warrants_router)
 app.include_router(ws_router)
