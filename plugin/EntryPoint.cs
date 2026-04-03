@@ -3,8 +3,6 @@ using System.Threading;
 using LSPD_First_Response.Mod.API;
 using Rage;
 
-[assembly: Rage.Attributes.Plugin("LSPDFR Dispatch", Description = "AI-powered police dispatch system", Author = "LSPDFRDispatch")]
-
 namespace LSPDFRDispatch
 {
     public class EntryPoint : Plugin
