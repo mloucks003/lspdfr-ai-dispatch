@@ -22,10 +22,6 @@
       <HintPath>lib\RagePluginHook.dll</HintPath>
       <Private>False</Private>
     </Reference>
-    <Reference Include="LSPD First Response">
-      <HintPath>lib\LSPD First Response.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
   </ItemGroup>
 
 </Project>
