@@ -26,7 +26,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "name": "plate_check",
-        "description": "Look up a vehicle by license plate number. Returns the vehicle's make, model, color, registered owner name, registration status, insurance status, and any flags (stolen, expired registration, BOLO, etc). The data comes from the LSPD database.",
+        "description": "Look up a vehicle by license plate number. Returns make, model, color, registered owner, and flags.",
         "parameters": {
             "type": "object",
             "properties": {

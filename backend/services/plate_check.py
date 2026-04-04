@@ -48,11 +48,6 @@ LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia",
 FLAGS = ["", "", "", "", "", "stolen", "expired_registration", "bolo",
          "suspended_registration"]
 
-REGISTRATION_STATUSES = ["valid", "valid", "valid", "valid", "valid",
-                         "expired", "suspended"]
-INSURANCE_STATUSES = ["current", "current", "current", "current",
-                      "lapsed", "none"]
-
 
 class PlateCheckService:
     def __init__(self, db: DatabaseService) -> None:
@@ -65,62 +60,14 @@ class PlateCheckService:
         )
 
         if doc is not None:
-            # Fill in any missing fields (e.g. record came from plugin
-            # game state which only has plate/make/model/color)
-            doc = await self._enrich_vehicle(doc)
             logger.info("Plate check for %r: found existing record", plate)
             return doc
 
-        # Auto-generate a full vehicle record
+        # Auto-generate a vehicle record
         doc = self._generate_vehicle(plate.strip().upper())
         doc_id = await self._db.audited_insert("vehicles", doc)
         doc["_id"] = doc_id
         logger.info("Plate check for %r: generated new record", plate)
-        return doc
-
-    async def _enrich_vehicle(self, doc: Dict[str, Any]) -> Dict[str, Any]:
-        """Fill in missing dispatch fields on a vehicle record.
-
-        The plugin only sends plate/make/model/color from the game.
-        When an officer runs a plate we need owner, registration, insurance,
-        and flags — generate those deterministically from the plate and
-        persist them so subsequent checks are consistent.
-        """
-        plate = doc.get("plate", "")
-        rng = random.Random(hash(plate.upper()))
-
-        updates: Dict[str, Any] = {}
-
-        if not doc.get("registered_owner"):
-            updates["registered_owner"] = f"{rng.choice(FIRST_NAMES)} {rng.choice(LAST_NAMES)}"
-        else:
-            # Advance RNG to keep subsequent values stable
-            rng.choice(FIRST_NAMES)
-            rng.choice(LAST_NAMES)
-
-        if not doc.get("registration_status"):
-            updates["registration_status"] = rng.choice(REGISTRATION_STATUSES)
-        else:
-            rng.choice(REGISTRATION_STATUSES)
-
-        if not doc.get("insurance_status"):
-            updates["insurance_status"] = rng.choice(INSURANCE_STATUSES)
-        else:
-            rng.choice(INSURANCE_STATUSES)
-
-        if "flags" not in doc or doc.get("flags") is None:
-            flag = rng.choice(FLAGS)
-            updates["flags"] = [flag] if flag else []
-
-        if updates:
-            await self._db.db.vehicles.update_one(
-                {"_id": doc["_id"]},
-                {"$set": updates},
-            )
-            doc.update(updates)
-            logger.info("Enriched vehicle record for plate %r with %s",
-                        plate, list(updates.keys()))
-
         return doc
 
     def _generate_vehicle(self, plate: str) -> Dict[str, Any]:
@@ -139,8 +86,6 @@ class PlateCheckService:
             "model": model,
             "color": color,
             "registered_owner": owner,
-            "registration_status": rng.choice(REGISTRATION_STATUSES),
-            "insurance_status": rng.choice(INSURANCE_STATUSES),
             "flags": [flag] if flag else [],
             "created_at": now,
             "updated_at": now,
