@@ -40,14 +40,53 @@ class NameCheckService:
         )
 
         if doc is not None:
+            # Fill in missing dispatch fields (plugin only sends name)
+            doc = await self._enrich_person(doc)
             logger.info("Name check for %r: found existing record", name)
             return doc
 
-        # Auto-generate a person record with criminal history
+        # Auto-generate a full person record with criminal history
         doc = self._generate_person(name.strip())
         doc_id = await self._db.audited_insert("persons", doc)
         doc["_id"] = doc_id
         logger.info("Name check for %r: generated new record", name)
+        return doc
+
+    async def _enrich_person(self, doc: Dict[str, Any]) -> Dict[str, Any]:
+        """Fill in missing dispatch fields on a person record.
+
+        The plugin only sends name (and maybe description) from the game.
+        When an officer runs a name we need DOB, license status, priors,
+        warrants — generate those deterministically and persist them.
+        """
+        name = doc.get("name", "")
+        generated = self._generate_person(name)
+        updates: Dict[str, Any] = {}
+
+        if not doc.get("date_of_birth"):
+            updates["date_of_birth"] = generated["date_of_birth"]
+
+        if not doc.get("physical_description") or not isinstance(doc.get("physical_description"), dict) or not doc["physical_description"].get("gender"):
+            updates["physical_description"] = generated["physical_description"]
+
+        if not doc.get("license_status"):
+            updates["license_status"] = generated["license_status"]
+
+        if "prior_offenses" not in doc or doc.get("prior_offenses") is None:
+            updates["prior_offenses"] = generated["prior_offenses"]
+
+        if "active_warrants" not in doc or doc.get("active_warrants") is None:
+            updates["active_warrants"] = generated["active_warrants"]
+
+        if updates:
+            await self._db.db.persons.update_one(
+                {"_id": doc["_id"]},
+                {"$set": updates},
+            )
+            doc.update(updates)
+            logger.info("Enriched person record for %r with %s",
+                        name, list(updates.keys()))
+
         return doc
 
     def _generate_person(self, name: str) -> Dict[str, Any]:
