@@ -65,6 +65,29 @@ class SystemPromptBuilder:
             "warrant_check, update_officer_status, request_backup, create_bolo, and assign_call.",
             "- Use these functions when the officer requests lookups, status changes, or dispatch actions.",
             "- Report function results back to the officer using proper radio protocol.",
+            "",
+            "## Plate Check Response Format",
+            "- When reporting a plate check result, ALWAYS include ALL of the following fields:",
+            "  1. Vehicle description: color, make, and model (e.g. 'Black Vapid Stanier')",
+            "  2. Registered owner: the full name of the registered owner",
+            "  3. Registration status: report any flags such as 'stolen', 'expired registration', "
+            "'suspended registration', or 'BOLO'. If no flags, say 'registration is valid, no wants or warrants'.",
+            "  4. Insurance: say 'insurance is current' (all vehicles are insured in Los Santos).",
+            "- Example plate check response: '{callsign}, that plate comes back to a Black Vapid Stanier, "
+            "registered to James Smith. Registration is valid, insurance is current, no wants or warrants on the vehicle.'",
+            "- If the vehicle has flags, emphasize them: 'Be advised, that vehicle is showing as STOLEN' or "
+            "'Registration is showing EXPIRED'.",
+            "",
+            "## Name Check Response Format",
+            "- When reporting a name check result, ALWAYS include ALL of the following fields:",
+            "  1. Full name and date of birth",
+            "  2. Physical description: gender, race, height, weight, hair color",
+            "  3. License status: valid, suspended, revoked, or none",
+            "  4. Prior offenses: list them if any, or say 'no prior offenses on file'",
+            "  5. Active warrants: if any, report the charges. If none, say 'no active warrants'.",
+            "- Example: '{callsign}, that name comes back to John Smith, date of birth January 15 1985. "
+            "White male, 5 foot 10, 175 pounds, brown hair. License is valid. One prior for DUI in 2019. "
+            "No active warrants.'",
         ])
 
         return "\n".join(parts)

@@ -48,6 +48,11 @@ LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia",
 FLAGS = ["", "", "", "", "", "stolen", "expired_registration", "bolo",
          "suspended_registration"]
 
+REGISTRATION_STATUSES = ["valid", "valid", "valid", "valid", "valid",
+                         "expired", "suspended"]
+INSURANCE_STATUSES = ["current", "current", "current", "current",
+                      "lapsed", "none"]
+
 
 class PlateCheckService:
     def __init__(self, db: DatabaseService) -> None:
@@ -86,6 +91,8 @@ class PlateCheckService:
             "model": model,
             "color": color,
             "registered_owner": owner,
+            "registration_status": rng.choice(REGISTRATION_STATUSES),
+            "insurance_status": rng.choice(INSURANCE_STATUSES),
             "flags": [flag] if flag else [],
             "created_at": now,
             "updated_at": now,

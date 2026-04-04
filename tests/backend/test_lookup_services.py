@@ -10,11 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
-from bson import ObjectId
 
-from backend.services.plate_check import PlateCheckService, NO_RECORD_RESPONSE
+from backend.services.plate_check import PlateCheckService
 from backend.services.name_check import NameCheckService
-from backend.services.name_check import NO_RECORD_RESPONSE as NAME_NO_RECORD
 from backend.services.criminal_history import CriminalHistoryService
 from backend.services.game_state import GameStateService
 
@@ -29,18 +27,20 @@ def _mock_db():
     db.db = MagicMock()
     db.db.vehicles = MagicMock()
     db.db.persons = MagicMock()
-    db.audited_insert = AsyncMock()
+    db.audited_insert = AsyncMock(return_value="generated_id_123")
     return db
 
 
 def _sample_vehicle_doc(plate="ABC1234"):
     return {
-        "_id": ObjectId(),
+        "_id": "abc123",
         "plate": plate,
         "make": "Vapid",
         "model": "Crown Victoria",
         "color": "Black",
         "registered_owner": "John Doe",
+        "registration_status": "valid",
+        "insurance_status": "current",
         "flags": ["stolen"],
         "created_at": datetime.now(timezone.utc),
         "updated_at": datetime.now(timezone.utc),
@@ -49,7 +49,7 @@ def _sample_vehicle_doc(plate="ABC1234"):
 
 def _sample_person_doc(name="Jane Smith"):
     return {
-        "_id": ObjectId(),
+        "_id": "def456",
         "name": name,
         "date_of_birth": "1990-05-15",
         "physical_description": {
@@ -94,14 +94,24 @@ class TestPlateCheckService:
         assert "stolen" in result["flags"]
 
     @pytest.mark.asyncio
-    async def test_returns_no_record_when_not_found(self):
+    async def test_auto_generates_when_not_found(self):
+        """When plate not found, auto-generate a vehicle record."""
         db = _mock_db()
         db.db.vehicles.find_one = AsyncMock(return_value=None)
 
         svc = PlateCheckService(db)
         result = await svc.check_plate("UNKNOWN")
 
-        assert result == {"status": "no_record"}
+        # Should have generated a record with all required fields
+        assert result["plate"] == "UNKNOWN"
+        assert "make" in result
+        assert "model" in result
+        assert "color" in result
+        assert "registered_owner" in result
+        assert "registration_status" in result
+        assert "insurance_status" in result
+        assert "flags" in result
+        db.audited_insert.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_case_insensitive_query(self):
@@ -112,7 +122,6 @@ class TestPlateCheckService:
         svc = PlateCheckService(db)
         result = await svc.check_plate("ABC1234")
 
-        # Verify the regex query uses case-insensitive option
         call_args = db.db.vehicles.find_one.call_args
         query = call_args[0][0]
         assert "$options" in query["plate"]
@@ -128,21 +137,34 @@ class TestPlateCheckService:
 
         call_args = db.db.vehicles.find_one.call_args
         query = call_args[0][0]
-        # The regex should not contain leading/trailing spaces
         assert "  " not in query["plate"]["$regex"]
 
     @pytest.mark.asyncio
-    async def test_no_record_response_is_fresh_dict(self):
-        """Each no-record response should be a new dict, not a shared ref."""
+    async def test_generated_vehicle_has_registration_and_insurance(self):
+        """Auto-generated vehicles should include registration and insurance status."""
         db = _mock_db()
         db.db.vehicles.find_one = AsyncMock(return_value=None)
 
         svc = PlateCheckService(db)
-        r1 = await svc.check_plate("A")
-        r2 = await svc.check_plate("B")
+        result = await svc.check_plate("TEST123")
 
-        assert r1 is not r2
-        assert r1 == r2 == {"status": "no_record"}
+        assert result["registration_status"] in ("valid", "expired", "suspended")
+        assert result["insurance_status"] in ("current", "lapsed", "none")
+
+    @pytest.mark.asyncio
+    async def test_generated_vehicle_is_deterministic(self):
+        """Same plate should generate the same vehicle (seeded RNG)."""
+        db = _mock_db()
+        db.db.vehicles.find_one = AsyncMock(return_value=None)
+
+        svc = PlateCheckService(db)
+        r1 = await svc.check_plate("SEED1")
+        r2 = await svc.check_plate("SEED1")
+
+        assert r1["make"] == r2["make"]
+        assert r1["model"] == r2["model"]
+        assert r1["color"] == r2["color"]
+        assert r1["registered_owner"] == r2["registered_owner"]
 
 
 # ===================================================================
@@ -168,14 +190,21 @@ class TestNameCheckService:
         assert result["license_status"] == "valid"
 
     @pytest.mark.asyncio
-    async def test_returns_no_record_when_not_found(self):
+    async def test_auto_generates_when_not_found(self):
+        """When name not found, auto-generate a person record."""
         db = _mock_db()
         db.db.persons.find_one = AsyncMock(return_value=None)
 
         svc = NameCheckService(db)
         result = await svc.check_name("Nobody Here")
 
-        assert result == {"status": "no_record"}
+        assert result["name"] == "Nobody Here"
+        assert "date_of_birth" in result
+        assert "physical_description" in result
+        assert "license_status" in result
+        assert "prior_offenses" in result
+        assert "active_warrants" in result
+        db.audited_insert.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_case_insensitive_query(self):
@@ -221,14 +250,13 @@ class TestCriminalHistoryService:
                                                         "hair_color": "Black"})
 
         assert result["name"] == "John Doe"
-        # Should NOT have called audited_insert since record exists
         db.audited_insert.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_generates_new_record_when_not_found(self):
         db = _mock_db()
         db.db.persons.find_one = AsyncMock(return_value=None)
-        new_id = ObjectId()
+        new_id = "new_id_abc"
         db.audited_insert = AsyncMock(return_value=new_id)
 
         phys = {
@@ -251,7 +279,7 @@ class TestCriminalHistoryService:
     async def test_generated_dob_is_valid_format(self):
         db = _mock_db()
         db.db.persons.find_one = AsyncMock(return_value=None)
-        db.audited_insert = AsyncMock(return_value=ObjectId())
+        db.audited_insert = AsyncMock(return_value="id_123")
 
         svc = CriminalHistoryService(db, rng=random.Random(99))
         result = await svc.get_or_create("Test Ped", {
@@ -260,17 +288,16 @@ class TestCriminalHistoryService:
         })
 
         dob = result["date_of_birth"]
-        # Should be YYYY-MM-DD format
         parts = dob.split("-")
         assert len(parts) == 3
-        assert len(parts[0]) == 4  # year
-        datetime.strptime(dob, "%Y-%m-%d")  # should not raise
+        assert len(parts[0]) == 4
+        datetime.strptime(dob, "%Y-%m-%d")
 
     @pytest.mark.asyncio
     async def test_generated_license_status_is_valid(self):
         db = _mock_db()
         db.db.persons.find_one = AsyncMock(return_value=None)
-        db.audited_insert = AsyncMock(return_value=ObjectId())
+        db.audited_insert = AsyncMock(return_value="id_456")
 
         svc = CriminalHistoryService(db, rng=random.Random(7))
         result = await svc.get_or_create("Status Ped", {
@@ -284,7 +311,7 @@ class TestCriminalHistoryService:
     async def test_generated_priors_are_list(self):
         db = _mock_db()
         db.db.persons.find_one = AsyncMock(return_value=None)
-        db.audited_insert = AsyncMock(return_value=ObjectId())
+        db.audited_insert = AsyncMock(return_value="id_789")
 
         svc = CriminalHistoryService(db, rng=random.Random(123))
         result = await svc.get_or_create("Prior Ped", {
@@ -303,7 +330,7 @@ class TestCriminalHistoryService:
         """Same RNG seed should produce the same profile."""
         db = _mock_db()
         db.db.persons.find_one = AsyncMock(return_value=None)
-        db.audited_insert = AsyncMock(return_value=ObjectId())
+        db.audited_insert = AsyncMock(return_value="id_det")
 
         phys = {"gender": "Male", "race": "White",
                 "height": "5'11\"", "weight": "175 lbs", "hair_color": "Blond"}
@@ -329,7 +356,7 @@ class TestGameStateService:
     @pytest.mark.asyncio
     async def test_upsert_person_creates_new_record(self):
         db = _mock_db()
-        new_id = ObjectId()
+        new_id = "new_ped_id"
         mock_result = MagicMock()
         mock_result.upserted_id = new_id
         db.db.persons.update_one = AsyncMock(return_value=mock_result)
@@ -345,9 +372,9 @@ class TestGameStateService:
     @pytest.mark.asyncio
     async def test_upsert_person_updates_existing_record(self):
         db = _mock_db()
-        existing_id = ObjectId()
+        existing_id = "existing_ped_id"
         mock_result = MagicMock()
-        mock_result.upserted_id = None  # existing record updated
+        mock_result.upserted_id = None
         db.db.persons.update_one = AsyncMock(return_value=mock_result)
         db.db.persons.find_one = AsyncMock(return_value={
             "_id": existing_id, "name": "Existing Ped",
@@ -366,9 +393,9 @@ class TestGameStateService:
     async def test_upsert_person_uses_case_insensitive_match(self):
         db = _mock_db()
         mock_result = MagicMock()
-        mock_result.upserted_id = ObjectId()
+        mock_result.upserted_id = "new_id"
         db.db.persons.update_one = AsyncMock(return_value=mock_result)
-        db.db.persons.find_one = AsyncMock(return_value={"_id": ObjectId(), "name": "Test"})
+        db.db.persons.find_one = AsyncMock(return_value={"_id": "some_id", "name": "Test"})
 
         svc = GameStateService(db)
         await svc.upsert_person({"name": "Test"})
@@ -381,7 +408,7 @@ class TestGameStateService:
     @pytest.mark.asyncio
     async def test_upsert_vehicle_creates_new_record(self):
         db = _mock_db()
-        new_id = ObjectId()
+        new_id = "new_veh_id"
         mock_result = MagicMock()
         mock_result.upserted_id = new_id
         db.db.vehicles.update_one = AsyncMock(return_value=mock_result)
@@ -401,7 +428,7 @@ class TestGameStateService:
     @pytest.mark.asyncio
     async def test_upsert_vehicle_updates_existing_record(self):
         db = _mock_db()
-        existing_id = ObjectId()
+        existing_id = "existing_veh_id"
         mock_result = MagicMock()
         mock_result.upserted_id = None
         db.db.vehicles.update_one = AsyncMock(return_value=mock_result)
@@ -418,9 +445,9 @@ class TestGameStateService:
     async def test_upsert_vehicle_uses_case_insensitive_match(self):
         db = _mock_db()
         mock_result = MagicMock()
-        mock_result.upserted_id = ObjectId()
+        mock_result.upserted_id = "new_id"
         db.db.vehicles.update_one = AsyncMock(return_value=mock_result)
-        db.db.vehicles.find_one = AsyncMock(return_value={"_id": ObjectId(), "plate": "abc"})
+        db.db.vehicles.find_one = AsyncMock(return_value={"_id": "some_id", "plate": "abc"})
 
         svc = GameStateService(db)
         await svc.upsert_vehicle({"plate": "ABC"})
@@ -431,12 +458,11 @@ class TestGameStateService:
 
     @pytest.mark.asyncio
     async def test_upsert_person_sets_created_at_only_on_insert(self):
-        """$setOnInsert should contain created_at, $set should not."""
         db = _mock_db()
         mock_result = MagicMock()
-        mock_result.upserted_id = ObjectId()
+        mock_result.upserted_id = "new_id"
         db.db.persons.update_one = AsyncMock(return_value=mock_result)
-        db.db.persons.find_one = AsyncMock(return_value={"_id": ObjectId(), "name": "Test"})
+        db.db.persons.find_one = AsyncMock(return_value={"_id": "some_id", "name": "Test"})
 
         svc = GameStateService(db)
         await svc.upsert_person({"name": "Test"})
@@ -450,9 +476,9 @@ class TestGameStateService:
     async def test_upsert_vehicle_sets_created_at_only_on_insert(self):
         db = _mock_db()
         mock_result = MagicMock()
-        mock_result.upserted_id = ObjectId()
+        mock_result.upserted_id = "new_id"
         db.db.vehicles.update_one = AsyncMock(return_value=mock_result)
-        db.db.vehicles.find_one = AsyncMock(return_value={"_id": ObjectId(), "plate": "X"})
+        db.db.vehicles.find_one = AsyncMock(return_value={"_id": "some_id", "plate": "X"})
 
         svc = GameStateService(db)
         await svc.upsert_vehicle({"plate": "X"})
