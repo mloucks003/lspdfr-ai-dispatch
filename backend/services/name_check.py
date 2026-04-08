@@ -43,12 +43,9 @@ class NameCheckService:
             logger.info("Name check for %r: found existing record", name)
             return doc
 
-        # Auto-generate a person record with criminal history
-        doc = self._generate_person(name.strip())
-        doc_id = await self._db.audited_insert("persons", doc)
-        doc["_id"] = doc_id
-        logger.info("Name check for %r: generated new record", name)
-        return doc
+        logger.info("Name check for %r: no record found in database", name)
+        return {"status": "no_record", "name": name.strip(),
+                "message": "No record on file for that name."}
 
     def _generate_person(self, name: str) -> Dict[str, Any]:
         rng = random.Random(hash(name.lower()))

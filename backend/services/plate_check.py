@@ -54,21 +54,57 @@ class PlateCheckService:
         self._db = db
 
     async def check_plate(self, plate: str) -> Dict[str, Any]:
-        escaped = re.escape(plate.strip())
+        clean = plate.strip().upper()
+        # Remove spaces/dashes that speech recognition might insert
+        normalized = re.sub(r"[\s\-]+", "", clean)
+        logger.info("Plate check requested: raw=%r, normalized=%r", plate, normalized)
+
+        # 1. Exact match (case-insensitive)
+        escaped = re.escape(normalized)
         doc = await self._db.db.vehicles.find_one(
             {"plate": {"$regex": f"^{escaped}$", "$options": "i"}}
         )
-
         if doc is not None:
-            logger.info("Plate check for %r: found existing record", plate)
+            logger.info("Plate check for %r: exact match found — %s %s %s",
+                        normalized, doc.get("color"), doc.get("make"), doc.get("model"))
             return doc
 
-        # Auto-generate a vehicle record
-        doc = self._generate_vehicle(plate.strip().upper())
-        doc_id = await self._db.audited_insert("vehicles", doc)
-        doc["_id"] = doc_id
-        logger.info("Plate check for %r: generated new record", plate)
-        return doc
+        # 2. Partial/fuzzy match — plate might be a substring or vice versa
+        #    Search all vehicles and find the best match
+        all_vehicles = await self._db.db.vehicles.find().to_list(1000)
+        if all_vehicles:
+            best_match = None
+            best_score = 0
+            for v in all_vehicles:
+                v_plate = re.sub(r"[\s\-]+", "", (v.get("plate") or "").upper())
+                if not v_plate:
+                    continue
+                # Check if one contains the other
+                if normalized in v_plate or v_plate in normalized:
+                    score = len(v_plate)
+                    if score > best_score:
+                        best_score = score
+                        best_match = v
+                # Check character overlap ratio
+                else:
+                    common = sum(1 for a, b in zip(normalized, v_plate) if a == b)
+                    max_len = max(len(normalized), len(v_plate))
+                    if max_len > 0 and common / max_len > 0.6:
+                        if common > best_score:
+                            best_score = common
+                            best_match = v
+
+            if best_match:
+                logger.info("Plate check for %r: fuzzy match to %r — %s %s %s",
+                            normalized, best_match.get("plate"),
+                            best_match.get("color"), best_match.get("make"),
+                            best_match.get("model"))
+                return best_match
+
+        # 3. No match at all — tell the officer
+        logger.info("Plate check for %r: no record found in database", normalized)
+        return {"status": "no_record", "plate": normalized,
+                "message": "No record on file for that plate."}
 
     def _generate_vehicle(self, plate: str) -> Dict[str, Any]:
         rng = random.Random(hash(plate))

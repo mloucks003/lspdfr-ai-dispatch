@@ -84,6 +84,10 @@ async def receive_game_state(body: GameStateIn):
 
     logger.debug("Game state received: %d peds, %d vehicles",
                  len(body.nearby_peds), len(body.nearby_vehicles))
+    for v in body.nearby_vehicles:
+        if v.plate:
+            logger.info("Plugin vehicle: plate=%s make=%s model=%s color=%s",
+                        v.plate, v.make, v.model, v.color)
     return {"status": "ok"}
 
 
