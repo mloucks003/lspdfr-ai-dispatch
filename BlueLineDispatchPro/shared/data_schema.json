@@ -1,0 +1,173 @@
+{
+  "_comment": "JSON schemas for all data files exchanged between FiveM companion and desktop app",
+  "plate_data": {
+    "_description": "Vehicle/plate lookup result — written by companion, read by desktop",
+    "schema": {
+      "timestamp": "ISO8601 string",
+      "plate": "string — license plate number",
+      "state": "string — registration state (e.g. 'San Andreas')",
+      "stolen": "boolean",
+      "flagged": "boolean",
+      "vehicle": {
+        "make": "string",
+        "model": "string",
+        "year": "integer",
+        "color": "string",
+        "vin": "string",
+        "type": "string — sedan/suv/truck/motorcycle/etc"
+      },
+      "registration": {
+        "status": "string — valid/expired/suspended/none",
+        "expiry": "string — date",
+        "insurance": "string — valid/expired/none"
+      },
+      "owner": {
+        "first_name": "string",
+        "last_name": "string",
+        "dob": "string — YYYY-MM-DD",
+        "license_status": "string — valid/suspended/revoked/none",
+        "license_class": "string",
+        "address": "string",
+        "phone": "string",
+        "warrants": "boolean",
+        "felony_warrants": "boolean",
+        "wanted": "boolean",
+        "gang_affiliated": "boolean",
+        "gang_name": "string",
+        "priors": "integer — number of prior arrests",
+        "notes": "string"
+      },
+      "source": "string — alpr/manual/wraith/fivepd"
+    },
+    "example": {
+      "timestamp": "2025-06-15T14:32:10Z",
+      "plate": "A1B2C3",
+      "state": "San Andreas",
+      "stolen": false,
+      "flagged": true,
+      "vehicle": {
+        "make": "Benefactor",
+        "model": "Schwartzer",
+        "year": 2019,
+        "color": "Black",
+        "vin": "1HGBH41JXMN109186",
+        "type": "sports"
+      },
+      "registration": {
+        "status": "valid",
+        "expiry": "2026-01-01",
+        "insurance": "valid"
+      },
+      "owner": {
+        "first_name": "Michael",
+        "last_name": "De Santa",
+        "dob": "1968-10-11",
+        "license_status": "valid",
+        "license_class": "C",
+        "address": "3671 Whispymound Drive, Rockford Hills",
+        "phone": "555-0100",
+        "warrants": true,
+        "felony_warrants": true,
+        "wanted": false,
+        "gang_affiliated": false,
+        "gang_name": "",
+        "priors": 12,
+        "notes": "Known FIB contact. Approach with extreme caution."
+      },
+      "source": "wraith"
+    }
+  },
+  "ped_data": {
+    "_description": "Person/ped query result",
+    "schema": {
+      "timestamp": "ISO8601 string",
+      "first_name": "string",
+      "last_name": "string",
+      "dob": "string — YYYY-MM-DD",
+      "gender": "string — M/F",
+      "ethnicity": "string",
+      "height_cm": "integer",
+      "weight_kg": "integer",
+      "hair_color": "string",
+      "eye_color": "string",
+      "license_status": "string — valid/suspended/revoked/none",
+      "license_class": "string",
+      "license_expiry": "string",
+      "address": "string",
+      "phone": "string",
+      "warrants": "boolean",
+      "felony_warrants": "boolean",
+      "wanted": "boolean",
+      "probation": "boolean",
+      "parole": "boolean",
+      "gang_affiliated": "boolean",
+      "gang_name": "string",
+      "priors": "integer",
+      "prior_offenses": ["array of strings"],
+      "notes": "string",
+      "source": "string"
+    }
+  },
+  "active_calls": {
+    "_description": "Array of active calls",
+    "schema": {
+      "calls": [
+        {
+          "call_id": "string — unique ID",
+          "timestamp": "ISO8601",
+          "type": "string — call type (e.g. 'Robbery', 'Traffic Stop')",
+          "code": "string — e.g. '10-90', '187 PC'",
+          "priority": "integer — 1=highest, 5=lowest",
+          "status": "string — pending/dispatched/on-scene/clearing/closed",
+          "location": "string — street address or description",
+          "coords": { "x": "float", "y": "float", "z": "float" },
+          "description": "string",
+          "caller": "string",
+          "assigned_units": ["array of unit IDs"],
+          "notes": "string",
+          "source": "string — fivepd/lspdfr/manual"
+        }
+      ]
+    }
+  },
+  "unit_status": {
+    "_description": "Unit roster and status",
+    "schema": {
+      "units": [
+        {
+          "unit_id": "string — e.g. '1-ADAM-12'",
+          "name": "string",
+          "badge": "string",
+          "rank": "string",
+          "department": "string",
+          "status": "string — available/busy/on-scene/code-6/out-of-service",
+          "status_code": "string — 10-8/10-6/10-23/10-97",
+          "location": "string",
+          "coords": { "x": "float", "y": "float", "z": "float" },
+          "vehicle": "string",
+          "call_assigned": "string — call_id or null",
+          "last_update": "ISO8601"
+        }
+      ]
+    }
+  },
+  "bolos": {
+    "_description": "BOLOs and warrants",
+    "schema": {
+      "bolos": [
+        {
+          "bolo_id": "string",
+          "timestamp": "ISO8601",
+          "type": "string — vehicle/person/property",
+          "priority": "integer",
+          "subject": "string",
+          "description": "string",
+          "reason": "string — warrant/stolen/suspect",
+          "plate": "string",
+          "active": "boolean",
+          "issued_by": "string"
+        }
+      ]
+    }
+  }
+}

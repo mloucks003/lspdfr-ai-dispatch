@@ -1,0 +1,139 @@
+{
+  "_comment": "Maps keyword triggers to audio categories. Priority 1=highest. folder is relative to desktop/audio/",
+  "categories": {
+    "panic": {
+      "folder": "panic",
+      "priority": 1,
+      "cooldown_override_seconds": 0,
+      "triggers": [
+        "panic", "officer down", "shots fired", "need assistance", "10-99", "mayday",
+        "officer needs help", "man down", "emergency"
+      ],
+      "response_phrases": [
+        "ALL UNITS — Officer needs assistance! All available units respond immediately!",
+        "10-99, officer down! All units respond to the emergency!",
+        "Shots fired — all units respond! Officer down!"
+      ]
+    },
+    "backup": {
+      "folder": "backup",
+      "priority": 2,
+      "cooldown_override_seconds": null,
+      "triggers": [
+        "backup", "need backup", "requesting backup", "units available",
+        "10-33", "code 3", "requesting units"
+      ],
+      "response_phrases": [
+        "Copy, backup en route to your location.",
+        "All units, backup requested. Available units respond.",
+        "10-4, units are responding to your location."
+      ]
+    },
+    "chase": {
+      "folder": "chase",
+      "priority": 2,
+      "cooldown_override_seconds": null,
+      "triggers": [
+        "pursuit", "in pursuit", "vehicle pursuit", "foot pursuit", "fleeing vehicle",
+        "suspect fleeing", "high speed", "running"
+      ],
+      "response_phrases": [
+        "Copy, units are pursuing. Air support notified.",
+        "10-4, all units be advised pursuit is active.",
+        "Pursuit authorized. Spike strips requested."
+      ]
+    },
+    "plate": {
+      "folder": "plate",
+      "priority": 3,
+      "cooldown_override_seconds": null,
+      "triggers": [
+        "plate", "run a plate", "run the plate", "check the plate", "license plate",
+        "plates", "alpr", "registration", "vehicle check"
+      ],
+      "response_phrases": [
+        "Running that plate now, stand by.",
+        "10-4, checking registration. Stand by.",
+        "Copy, ALPR query submitted."
+      ]
+    },
+    "scene": {
+      "folder": "scene",
+      "priority": 4,
+      "cooldown_override_seconds": null,
+      "triggers": [
+        "on scene", "arrived on scene", "arrived", "on location", "10-23",
+        "at the location", "10-20", "my location"
+      ],
+      "response_phrases": [
+        "10-4, copy you are on scene.",
+        "Copy that, you are on location.",
+        "Received, noted on scene at your location."
+      ]
+    },
+    "callout": {
+      "folder": "callout",
+      "priority": 3,
+      "cooldown_override_seconds": null,
+      "triggers": [
+        "callout", "robbery", "burglary", "assault", "disturbance", "domestic",
+        "respond", "responding", "shooting", "stabbing", "accident", "crash",
+        "code 3", "code 2"
+      ],
+      "response_phrases": [
+        "Copy, dispatching units to your location now.",
+        "10-4, units are being dispatched.",
+        "All available units, please respond to the callout."
+      ]
+    },
+    "acknowledgment": {
+      "folder": "acknowledgment",
+      "priority": 5,
+      "cooldown_override_seconds": null,
+      "triggers": [
+        "dispatch", "county", "sheriff", "lspd", "los santos",
+        "10-4", "10-8", "copy", "received", "affirmative",
+        "code 4", "all clear", "cancel", "nevermind", "disregard",
+        "10-22", "10-24"
+      ],
+      "response_phrases": [
+        "10-4, copy that.",
+        "Received, copy.",
+        "Dispatch copies.",
+        "10-4, understood."
+      ]
+    },
+    "traffic_stop": {
+      "folder": "general",
+      "priority": 4,
+      "cooldown_override_seconds": null,
+      "triggers": [
+        "traffic stop", "vehicle stop", "felony stop", "10-38", "traffic",
+        "pulling over", "pulled over", "stop initiated"
+      ],
+      "response_phrases": [
+        "Copy, noting your traffic stop.",
+        "10-4, traffic stop copied at your location.",
+        "Copy your vehicle stop. Plates noted."
+      ]
+    },
+    "general": {
+      "folder": "general",
+      "priority": 6,
+      "cooldown_override_seconds": null,
+      "triggers": [
+        "all units", "attention all units", "be advised", "bulletin",
+        "bolo", "warrant", "stolen", "subject"
+      ],
+      "response_phrases": [
+        "All units copy.",
+        "Dispatch copies, all units notified.",
+        "10-4, noted."
+      ]
+    }
+  },
+  "scanner_categories": ["scanner", "general", "acknowledgment"],
+  "fallback_category": "acknowledgment",
+  "keyword_match_mode": "contains",
+  "case_sensitive": false
+}

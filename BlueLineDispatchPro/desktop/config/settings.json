@@ -1,0 +1,117 @@
+{
+  "_comment": "BlueLineDispatchPro — User Settings. Edited via the Settings tab in the app.",
+  "app": {
+    "version": "1.0.0",
+    "theme": "dark",
+    "start_minimized": false,
+    "minimize_to_tray": true,
+    "log_level": "INFO",
+    "window_width": 1280,
+    "window_height": 800
+  },
+  "audio": {
+    "input_device_index": null,
+    "output_device_index": null,
+    "input_device_name": "default",
+    "output_device_name": "default",
+    "radio_effect_intensity": 0.75,
+    "volume": 0.85,
+    "squelch_click": true,
+    "static_overlay": true,
+    "prevent_overlap": true,
+    "min_gap_between_audio_ms": 1500
+  },
+  "keyword_listener": {
+    "enabled": true,
+    "model_path": "models/vosk-model-en-us",
+    "confidence_threshold": 0.65,
+    "cooldown_seconds": 4.0,
+    "sample_rate": 16000,
+    "chunk_size": 4096,
+    "keywords": [
+      "dispatch",
+      "county",
+      "sheriff",
+      "lspd",
+      "los santos",
+      "backup",
+      "units available",
+      "10-4",
+      "10-8",
+      "10-20",
+      "10-22",
+      "10-23",
+      "10-24",
+      "10-33",
+      "10-99",
+      "pursuit",
+      "in pursuit",
+      "vehicle pursuit",
+      "foot pursuit",
+      "plate",
+      "run a plate",
+      "run the plate",
+      "check the plate",
+      "on scene",
+      "arrived on scene",
+      "panic",
+      "officer down",
+      "shots fired",
+      "need assistance",
+      "code 3",
+      "code 4",
+      "code 5",
+      "traffic stop",
+      "vehicle stop",
+      "felony stop",
+      "callout",
+      "respond",
+      "robbery",
+      "suspect",
+      "warrant",
+      "stolen",
+      "cancel",
+      "all units"
+    ]
+  },
+  "scanner_mode": {
+    "enabled": false,
+    "interval_min_seconds": 25,
+    "interval_max_seconds": 90,
+    "pause_during_response": true,
+    "active_call_multiplier": 0.6
+  },
+  "api_server": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 7623,
+    "api_key": "",
+    "log_requests": true
+  },
+  "file_watcher": {
+    "enabled": true,
+    "watch_directory": "%APPDATA%\\BlueLineDispatchPro",
+    "poll_interval_seconds": 0.5
+  },
+  "hotkeys": {
+    "toggle_listening": "F8",
+    "panic_button": "F9",
+    "toggle_scanner": "F10",
+    "mute_audio": "F11"
+  },
+  "cad": {
+    "agency_name": "Los Santos Police Department",
+    "agency_short": "LSPD",
+    "unit_id": "1-ADAM-12",
+    "default_priority": 2,
+    "auto_clear_calls_after_minutes": 120,
+    "max_log_entries": 500
+  },
+  "map": {
+    "center_lat": 34.052235,
+    "center_lon": -118.243683,
+    "default_zoom": 13,
+    "show_unit_trails": true,
+    "trail_length": 10
+  }
+}

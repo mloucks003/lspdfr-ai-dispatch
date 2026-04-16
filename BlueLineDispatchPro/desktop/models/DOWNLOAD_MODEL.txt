@@ -1,0 +1,98 @@
+================================================================================
+  BlueLineDispatchPro — Vosk Speech Recognition Model Setup
+================================================================================
+
+The keyword listener requires a Vosk offline speech recognition model.
+Models are NOT included in the download due to file size. Follow these steps:
+
+================================================================================
+  STEP 1: CHOOSE A MODEL
+================================================================================
+
+RECOMMENDED (Shadow PC — good balance of speed and accuracy):
+  vosk-model-small-en-us-0.15  (~40 MB)
+  → Best for most users. Fast, works on medium hardware.
+  → Download: https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+
+HIGHER ACCURACY (better detection, more CPU):
+  vosk-model-en-us-0.22  (~1.8 GB)
+  → Best accuracy. Requires more RAM and CPU.
+  → Download: https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip
+
+ULTRA SMALL (for very low-end hardware):
+  vosk-model-small-en-us-0.15  (~40 MB)
+  → Same as recommended above.
+
+All models available at: https://alphacephei.com/vosk/models
+
+================================================================================
+  STEP 2: DOWNLOAD AND INSTALL
+================================================================================
+
+Method A (Recommended — Script):
+  1. Open Command Prompt as Administrator on your Shadow PC
+  2. Navigate to the BlueLineDispatchPro\desktop folder
+  3. Run: python -c "import urllib.request, zipfile, os; urllib.request.urlretrieve('https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip', 'model.zip'); zipfile.ZipFile('model.zip').extractall('models/'); os.rename('models/vosk-model-small-en-us-0.15', 'models/vosk-model-en-us'); os.remove('model.zip'); print('Model installed!')"
+
+Method B (Manual):
+  1. Open your browser on Shadow PC
+  2. Go to: https://alphacephei.com/vosk/models
+  3. Download: vosk-model-small-en-us-0.15.zip
+  4. Right-click the ZIP → Extract All
+  5. Rename the extracted folder to: vosk-model-en-us
+  6. Move the renamed folder to: BlueLineDispatchPro\desktop\models\
+  
+  Final path should look like:
+    BlueLineDispatchPro\
+      desktop\
+        models\
+          vosk-model-en-us\       ← this folder
+            am\
+            conf\
+            graph\
+            ivector\
+            README
+            ...
+
+================================================================================
+  STEP 3: VERIFY IN SETTINGS
+================================================================================
+
+  1. Open BlueLineDispatchPro
+  2. Go to Settings tab
+  3. Under "Keyword Listener" → "Vosk Model Path"
+  4. Should show: models/vosk-model-en-us
+  5. Click "Save Settings"
+  6. Click "🎙 LISTEN: OFF" button to start listening
+
+================================================================================
+  TROUBLESHOOTING
+================================================================================
+
+  Error: "Vosk model not found"
+    → Double-check the model folder is named exactly: vosk-model-en-us
+    → Check the full path in Settings matches where you put it
+
+  Error: "Failed to load Vosk model" 
+    → The model may be corrupted. Re-download and extract again.
+
+  Listener starts but doesn't detect keywords:
+    → Try lowering the Confidence Threshold in Settings (e.g., 0.45)
+    → Speak clearly and at a normal pace
+    → Check Input Device is set to your correct microphone or VAC
+
+  "PyAudio not found" error:
+    → Run: pip install pyaudio
+    → If that fails on Windows: pip install pipwin && pipwin install pyaudio
+
+================================================================================
+  CUSTOM MODEL PATH
+================================================================================
+
+  If you want to put the model somewhere else, update the path in Settings:
+    Settings → Keyword Listener → Vosk Model Path
+  
+  You can use absolute paths like: C:\Users\YourName\vosk-model-en-us
+  Or relative paths from the desktop\ folder: models\vosk-model-en-us
+
+================================================================================

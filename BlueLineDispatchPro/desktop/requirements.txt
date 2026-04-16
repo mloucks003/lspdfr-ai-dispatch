@@ -1,0 +1,37 @@
+# BlueLineDispatchPro — Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# ── Speech Recognition (Offline) ──────────────────────────────────────────────
+vosk==0.3.45
+pyaudio==0.2.14
+
+# ── Audio Playback & Effects ───────────────────────────────────────────────────
+pydub==0.25.1
+simpleaudio==1.0.4
+numpy==1.26.4
+scipy==1.13.1
+
+# ── GUI Framework ──────────────────────────────────────────────────────────────
+customtkinter==5.2.2
+Pillow==10.3.0
+
+# ── Local HTTP API Server ──────────────────────────────────────────────────────
+flask==3.0.3
+flask-cors==4.0.1
+
+# ── File Watching ──────────────────────────────────────────────────────────────
+watchdog==4.0.1
+
+# ── Global Hotkeys ────────────────────────────────────────────────────────────
+keyboard==0.13.5
+
+# ── System Tray ───────────────────────────────────────────────────────────────
+pystray==0.19.5
+
+# ── Text-to-Speech (Audio Generation) ─────────────────────────────────────────
+edge-tts==6.1.12
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+requests==2.32.3
+python-dateutil==2.9.0
+pywin32==306 ; sys_platform == "win32"
