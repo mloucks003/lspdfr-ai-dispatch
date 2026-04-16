@@ -265,8 +265,11 @@ def build_powershell_script(categories: dict, audio_dir: Path, voice_hint: str) 
         for i, phrase in enumerate(phrases, start=1):
             wav_path = cat_dir / f"{i:02d}.wav"
             win_path = str(wav_path).replace("\\", "\\\\")
-            # Escape double-quotes inside the phrase for PowerShell
-            safe = phrase.replace('"', '`"').replace("'", "\\'")
+            # Sanitize phrase for PowerShell double-quoted string
+            safe = (phrase
+                    .replace('—', ' - ')   # em-dash → hyphen (fixes encoding bug)
+                    .replace('"', '`"')    # escape double-quotes
+                    .replace('`', '``'))   # escape backticks
             lines.append(f'Write-Wav "{safe}" "{win_path}"')
         lines.append("")
 
@@ -276,7 +279,7 @@ def build_powershell_script(categories: dict, audio_dir: Path, voice_hint: str) 
 
 def run_powershell_script(script: str, script_path: Path) -> bool:
     """Write and execute a PowerShell script file."""
-    script_path.write_text(script, encoding="utf-8")
+    script_path.write_text(script, encoding="utf-16")  # PS native encoding — avoids em-dash misread
     try:
         result = subprocess.run(
             [
