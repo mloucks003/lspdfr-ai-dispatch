@@ -7,7 +7,8 @@ pyaudio==0.2.14
 
 # ── Audio Playback & Effects ───────────────────────────────────────────────────
 pydub==0.25.1
-simpleaudio==1.0.4
+sounddevice==0.5.1
+soundfile==0.13.1
 numpy==1.26.4
 scipy==1.13.1
 

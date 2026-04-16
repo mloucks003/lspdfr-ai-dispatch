@@ -26,11 +26,11 @@ except ImportError:
     logger.warning("pydub/scipy not available — radio effects disabled")
 
 try:
-    import simpleaudio as sa
-    SIMPLEAUDIO_AVAILABLE = True
+    import sounddevice as sd
+    SOUNDDEVICE_AVAILABLE = True
 except ImportError:
-    SIMPLEAUDIO_AVAILABLE = False
-    logger.warning("simpleaudio not available — audio playback disabled")
+    SOUNDDEVICE_AVAILABLE = False
+    logger.warning("sounddevice not available — audio playback disabled")
 
 
 def _apply_radio_fx(audio: "AudioSegment", intensity: float, squelch: bool) -> "AudioSegment":
@@ -187,7 +187,7 @@ class AudioPlayer:
 
     def _play(self, filepath: str) -> None:
         """Load, process, and play an audio file."""
-        if not SIMPLEAUDIO_AVAILABLE:
+        if not SOUNDDEVICE_AVAILABLE:
             logger.debug(f"Would play: {filepath}")
             return
 
@@ -203,10 +203,13 @@ class AudioPlayer:
             if not raw:
                 return
 
-            play_obj = sa.play_buffer(raw, 1, 2, 44100)
+            # Play via sounddevice (numpy array, 44100 Hz, mono int16)
+            samples = np.frombuffer(raw, dtype=np.int16)
             with self._lock:
-                self._play_obj = play_obj
-            play_obj.wait_done()
+                self._play_obj = True  # flag: playing
+            sd.play(samples, samplerate=44100, blocking=True)
+            with self._lock:
+                self._play_obj = None
 
         except Exception as e:
             logger.error(f"Playback error ({filepath}): {e}")
@@ -241,13 +244,10 @@ class AudioPlayer:
         """Return list of available audio output devices."""
         devices = []
         try:
-            import pyaudio
-            p = pyaudio.PyAudio()
-            for i in range(p.get_device_count()):
-                info = p.get_device_info_by_index(i)
-                if info.get("maxOutputChannels", 0) > 0:
-                    devices.append({"index": i, "name": info["name"]})
-            p.terminate()
+            if SOUNDDEVICE_AVAILABLE:
+                for i, d in enumerate(sd.query_devices()):
+                    if d["max_output_channels"] > 0:
+                        devices.append({"index": i, "name": d["name"]})
         except Exception as e:
             logger.warning(f"Could not enumerate audio devices: {e}")
         return devices
@@ -256,13 +256,10 @@ class AudioPlayer:
         """Return list of available audio input devices."""
         devices = []
         try:
-            import pyaudio
-            p = pyaudio.PyAudio()
-            for i in range(p.get_device_count()):
-                info = p.get_device_info_by_index(i)
-                if info.get("maxInputChannels", 0) > 0:
-                    devices.append({"index": i, "name": info["name"]})
-            p.terminate()
+            if SOUNDDEVICE_AVAILABLE:
+                for i, d in enumerate(sd.query_devices()):
+                    if d["max_input_channels"] > 0:
+                        devices.append({"index": i, "name": d["name"]})
         except Exception as e:
             logger.warning(f"Could not enumerate input devices: {e}")
         return devices
