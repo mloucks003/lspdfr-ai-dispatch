@@ -18,10 +18,10 @@
 
   "vosk_model_path": "C:/Users/Shadow/Desktop/lspdfr-ai-dispatch/vosk-model-small-en-us-0.15",
 
-  "speech_threshold":     300,
-  "silence_threshold":    200,
-  "silence_end_seconds":  1.5,
-  "max_record_seconds":   20,
+  "speech_threshold":     500,
+  "silence_threshold":    250,
+  "silence_end_seconds":  1.2,
+  "max_record_seconds":   18,
 
   "radio_intensity": 0.82,
   "fallback_ptt_key": "caps lock"

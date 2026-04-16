@@ -176,16 +176,15 @@ class AIDispatcher:
                 self.on_dispatcher_speech(ack)
 
             while self._running:
-                # Small pause + flush after speaking so mic settles
-                time.sleep(0.3)
+                # Pause + flush after speaking so mic doesn't catch playback
+                time.sleep(0.35)
                 self._flush_queue()
 
                 self._set_state("session_wait")
                 audio = self._wait_for_speech_then_record()
 
                 if audio is None:
-                    # Session timed out — close channel
-                    logger.info("Session timed out, returning to idle")
+                    logger.info("Session timed out — returning to idle")
                     break
 
                 self._set_state("processing")
@@ -211,6 +210,11 @@ class AIDispatcher:
                     self.on_dispatcher_speech(ai_text)
                 self._speak(ai_text)
 
+                # Close session if officer signed off
+                if self._is_closing_transmission(text):
+                    logger.info("Officer went clear — closing session")
+                    break
+
         except Exception as e:
             logger.error(f"Session error: {e}")
             if self.on_error:
@@ -224,10 +228,18 @@ class AIDispatcher:
 
     def _wait_for_speech_then_record(self) -> np.ndarray | None:
         """
-        Phase 1: wait up to SESSION_TIMEOUT for speech to start.
-        Phase 2: record until 1.5s of silence after speech ends.
+        Phase 1: wait up to SESSION_TIMEOUT for sustained speech to start.
+          - Requires MIN_ONSET_CHUNKS consecutive loud chunks to avoid
+            false triggers from game audio or brief noise.
+          - Keeps a small pre-roll buffer so the start of speech isn't clipped.
+        Phase 2: record until SILENCE_END_CHUNKS of silence after speech.
         Returns int16 array, or None if session timed out.
         """
+        MIN_ONSET  = 2          # consecutive loud chunks needed to confirm speech
+        PRE_ROLL   = 4          # chunks to prepend before onset (avoids clipped starts)
+
+        pre_buf       = []      # rolling window before speech starts
+        onset_count   = 0
         buffer        = []
         speech_heard  = False
         silent_chunks = 0
@@ -244,17 +256,23 @@ class AIDispatcher:
             rms = int(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
 
             if not speech_heard:
-                # Waiting for speech onset
+                pre_buf.append(chunk)
+                if len(pre_buf) > PRE_ROLL:
+                    pre_buf.pop(0)
+
                 if rms >= self._speech_thresh:
-                    speech_heard = True
-                    buffer = [chunk]
-                    self._set_state("listening")
+                    onset_count += 1
+                    if onset_count >= MIN_ONSET:
+                        # Confirmed speech — prepend pre-roll
+                        speech_heard = True
+                        buffer = list(pre_buf)
+                        self._set_state("listening")
                 else:
+                    onset_count = 0
                     timeout_count += 1
                     if timeout_count >= self._session_timeout_chunks:
-                        return None   # nobody spoke — close session
+                        return None   # timed out — close session
             else:
-                # Recording
                 buffer.append(chunk)
                 if rms >= self._silence_thresh:
                     silent_chunks = 0
@@ -266,6 +284,18 @@ class AIDispatcher:
                     break
 
         return np.concatenate(buffer).astype(np.int16) if buffer else None
+
+    # ── Session close detection ───────────────────────────────────────────────
+
+    _CLOSE_PHRASES = [
+        "code 4", "code four", "10-8", "ten eight",
+        "going clear", "out of service", "show me clear",
+        "i'm clear", "we're clear", "that'll be all",
+    ]
+
+    def _is_closing_transmission(self, text: str) -> bool:
+        t = text.lower()
+        return any(p in t for p in self._CLOSE_PHRASES)
 
     # ── Whisper STT ───────────────────────────────────────────────────────────
 
@@ -285,37 +315,47 @@ class AIDispatcher:
 
     def _system_prompt(self) -> str:
         cs = self.callsign
-        return f"""You are a professional police radio dispatcher for {self.agency}.
-You are communicating with Officer {cs} via police radio.
+        return f"""You are a police radio dispatcher for {self.agency}. \
+You are talking to unit {cs} over the radio.
 
-RADIO RULES:
-- Responses are SHORT — 1 to 3 sentences, under 50 words total
-- Always address the officer as "{cs}" — never "officer"
-- Use 10-codes naturally: 10-4 (copy), 10-8 (available), 10-23 (on scene), \
-10-33 (emergency/backup), 10-22 (cancel), 10-38 (traffic stop), 10-78 (need assistance)
-- Sound calm, professional, authoritative at all times
-- Never say you are an AI or a computer
+VOICE AND TONE:
+You are calm, clipped, and professional. Real dispatchers do not have warm personalities \
+on the radio — they are efficient and precise. No "stay safe", no "always here for you", \
+no emotional language. Short sentences. Radio cadence.
 
-PLATE / WARRANT RETURNS:
-When {cs} asks to run a plate or check a person:
-Step 1 — Immediately say: "10-4 {cs}, running [PLATE/NAME]. Stand by."
-Step 2 — After "..." in the same response, give the full return:
-  "[PLATE] comes back to a [YEAR] [COLOR] [MAKE] [MODEL], registered to [FIRST LAST] \
-of [STREET ADDRESS], [CITY]. Registration [valid / expired / suspended]. \
-Insurance [valid / lapsed]. [Flag if any — 80% of plates come back clean; \
-~15% minor issue like expired reg; ~5% have a warrant or stolen flag.]"
-End with: "Anything further, {cs}?"
+RESPONSE LENGTH:
+1 to 2 sentences maximum. Under 20 words preferred. Never more than 35 words.
 
-COMMON SCENARIOS:
-- Traffic stop → "Copy {cs}, showing you on a traffic stop at [location]."
-- Pursuit → broadcast to all units, authorize spike strips if needed
-- Backup / 10-33 → dispatch units code 3
-- 10-23 on scene → "Copy your arrival, {cs}. Units are standing by."
-- Code 4 / clear → "Copy code 4, {cs}. Return to service when ready."
-- Shots fired / OIS → priority response, notify EMS, supervisor
-- Can't understand → "Say again {cs}?"
+10-CODES TO USE NATURALLY:
+10-4 (copy/acknowledged), 10-8 (in service/available), 10-23 (arrived on scene), \
+10-38 (traffic stop), 10-33 (emergency/officer needs help), 10-78 (need assistance), \
+10-22 (disregard), 10-20 (location), 10-29 (check for wants/warrants).
 
-STAY IN CHARACTER ALWAYS. You ARE the dispatcher."""
+PLATE AND NAME RUNS — CRITICAL RULE:
+NEVER output brackets, placeholders, or template text like [PLATE], [YEAR], [COLOR].
+ALWAYS generate completely fictional but realistic data.
+
+When {cs} gives you a plate or name to run, respond like this real example:
+"10-4 {cs}, running Adam-Charlie-7. Stand by... Adam-Charlie-7 comes back to a \
+2017 silver Toyota Camry, registered to Marcus T. Webb of 4421 Innocence Boulevard, \
+Los Santos. Registration valid, insurance valid. No wants or warrants. \
+Anything further, {cs}?"
+
+Randomize results: 75% clean, 15% minor issue (expired reg or lapsed insurance), \
+10% warrant on file or vehicle reported stolen. Generate real-sounding names, \
+addresses, years, colors, makes, models every time.
+
+COMMON RESPONSES:
+- Traffic stop: "Copy {cs}, you're on a 10-38 at [location they gave or 'your location']."
+- On scene: "Copy {cs}, units standing by."
+- Backup / 10-33: "All units, 10-33 at {cs}'s location. Respond code 3."
+- Pursuit: "Copy {cs}, broadcasting pursuit. Air support notified. Spike strips authorized."
+- Shots fired: "Copy, {cs}. EMS and supervisors en route. Requesting additional units."
+- Code 4 / going clear / 10-8: "Copy {cs}, return to service." (nothing more)
+- Can't understand: "Say again {cs}?"
+- Non-police statements or random words: respond only "10-4." and nothing else.
+
+YOU ARE THE DISPATCHER. Never break character. Never acknowledge being an AI."""
 
     def _get_ai_response(self, user_text: str) -> str:
         self._conversation.append({"role": "user", "content": user_text})
