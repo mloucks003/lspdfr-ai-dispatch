@@ -170,7 +170,7 @@ class AIDispatcher:
         self._in_session = True
         try:
             # Opening acknowledgment
-            ack = f"{self.callsign}, go ahead {self.callsign}."
+            ack = f"{self.callsign}, go ahead."
             self._speak(ack)
             if self.on_dispatcher_speech:
                 self.on_dispatcher_speech(ack)
