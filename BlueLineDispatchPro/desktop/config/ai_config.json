@@ -1,0 +1,27 @@
+{
+  "_readme": "Fill in your keys and callsign. This file is gitignored — never commit it.",
+
+  "callsign": "Sam-44",
+  "callsign_variants": [
+    "sam 44", "sam forty four", "sam four four",
+    "sam-44", "sam44"
+  ],
+
+  "agency":           "Los Santos Police Department",
+  "department_short": "LSPD",
+
+  "openai_api_key":  "PASTE_YOUR_OPENAI_KEY_HERE",
+  "gpt_model":       "gpt-4o-mini",
+
+  "elevenlabs_api_key":  "PASTE_YOUR_ELEVENLABS_KEY_HERE",
+  "elevenlabs_voice_id": "21m00Tcm4TlvDq8ikWAM",
+
+  "vosk_model_path": "C:/Users/Shadow/Desktop/lspdfr-ai-dispatch/vosk-model-small-en-us-0.15",
+
+  "silence_threshold":    400,
+  "silence_end_seconds":  1.8,
+  "max_record_seconds":   25,
+
+  "radio_intensity": 0.82,
+  "fallback_ptt_key": "caps lock"
+}

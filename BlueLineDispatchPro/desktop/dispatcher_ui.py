@@ -1,47 +1,49 @@
 """
-BlueLineDispatchPro — Dispatcher-Only UI
-Minimal focused window: mic status, scanner, transcript, trigger log.
+BlueLineDispatchPro — AI Dispatcher UI
+
+Shows live AI state, conversation transcript, and manual controls.
 """
 import tkinter as tk
 from collections import deque
+from datetime import datetime
 from typing import Callable, Optional
 
-from ui.components import theme as T
+# ── Inline theme (no external dependency) ────────────────────────────────────
+BG        = "#1A1A2E"
+BG2       = "#16213E"
+BG3       = "#0F3460"
+FG        = "#E0E0E0"
+FG_MUTED  = "#888888"
+ACCENT    = "#2471A3"
+GREEN     = "#1E8449"
+RED       = "#C0392B"
+FONT      = "Segoe UI"
+MONO      = "Consolas"
 
-# ── Compact layout constants ──────────────────────────────────────────────────
-WIN_W, WIN_H = 560, 640
-INDICATOR_ON  = ("● ", T.ACCENT_GREEN)
-INDICATOR_OFF = ("● ", T.TEXT_MUTED)
+WIN_W, WIN_H = 580, 680
 
 
 class DispatcherWindow:
-    """Lightweight dispatcher-only window. No tabs, no CAD overhead."""
+    """AI Dispatcher window — shows live state, transcript, controls."""
 
-    def __init__(self, settings: dict):
-        self.settings = settings
-        self._trigger_log: deque = deque(maxlen=30)
-        self._listener_active = False
-        self._scanner_active = False
-        self._muted = False
-        self._panic_active = False
+    def __init__(self, config: dict):
+        self.config = config
+        self._log: deque = deque(maxlen=60)
 
-        # Callbacks wired by dispatcher_main.py after init
-        self.on_toggle_listen:  Optional[Callable] = None
-        self.on_toggle_scanner: Optional[Callable] = None
-        self.on_panic:          Optional[Callable] = None
-        self.on_mute:           Optional[Callable] = None
+        # Callbacks wired by dispatcher_main.py
+        self.on_manual_trigger: Optional[Callable] = None
+        self.on_clear_history:  Optional[Callable] = None
         self.on_quit:           Optional[Callable] = None
 
         self._build()
 
     def _build(self) -> None:
-        T.configure_ctk_theme()
         self.root = tk.Tk()
-        self.root.title("BlueLineDispatchPro — Dispatcher")
+        self.root.title("BlueLineDispatchPro — AI Dispatcher")
         self.root.geometry(f"{WIN_W}x{WIN_H}")
         self.root.resizable(True, True)
-        self.root.minsize(420, 500)
-        self.root.configure(bg=T.BG_PRIMARY)
+        self.root.minsize(440, 520)
+        self.root.configure(bg=BG)
         self.root.protocol("WM_DELETE_WINDOW", self._quit)
 
         # Center window
@@ -50,233 +52,112 @@ class DispatcherWindow:
         self.root.geometry(f"{WIN_W}x{WIN_H}+{(sw-WIN_W)//2}+{(sh-WIN_H)//2}")
 
         self._build_header()
+        self._build_state_bar()
         self._build_controls()
         self._build_transcript()
-        self._build_log()
         self._build_statusbar()
 
     def _build_header(self) -> None:
-        hdr = tk.Frame(self.root, bg=T.BG_HEADER, height=52)
+        hdr = tk.Frame(self.root, bg=BG2, height=52)
         hdr.pack(fill=tk.X)
         hdr.pack_propagate(False)
+        agency   = self.config.get("agency", "Los Santos Police Department")
+        callsign = self.config.get("callsign", "Unit 1")
+        tk.Label(hdr, text="🚔  BlueLineDispatchPro  — AI Dispatcher",
+                 bg=BG2, fg=FG, font=(FONT, 13, "bold"), padx=10).pack(side=tk.LEFT, pady=8)
+        tk.Label(hdr, text=f"{agency}  |  {callsign}",
+                 bg=BG2, fg=FG_MUTED, font=(FONT, 9)).pack(side=tk.LEFT)
 
-        tk.Label(hdr, text="🚔  BlueLineDispatchPro",
-                 bg=T.BG_HEADER, fg=T.TEXT_PRIMARY,
-                 font=(T.FONT_FAMILY, 13, "bold"), padx=T.PAD_MD).pack(side=tk.LEFT, pady=T.PAD_SM)
+    def _build_state_bar(self) -> None:
+        """Large live-state indicator — changes color per dispatcher state."""
+        self._state_var   = tk.StringVar(value="🎙  Listening for callsign...")
+        self._state_color = tk.StringVar(value="#3A3A5A")
 
-        agency = self.settings.get("cad", {}).get("agency_name", "Los Santos Police Department")
-        unit   = self.settings.get("cad", {}).get("unit_id", "1-ADAM-12")
-        tk.Label(hdr, text=f"{agency}  |  {unit}",
-                 bg=T.BG_HEADER, fg=T.TEXT_MUTED,
-                 font=T.FONT_SMALL).pack(side=tk.LEFT)
+        self._state_lbl = tk.Label(
+            self.root, textvariable=self._state_var,
+            bg="#3A3A5A", fg=FG,
+            font=(FONT, 12, "bold"), pady=14, padx=12, anchor="w",
+        )
+        self._state_lbl.pack(fill=tk.X, padx=8, pady=(8, 0))
 
     def _build_controls(self) -> None:
-        ctrl = tk.Frame(self.root, bg=T.BG_SECONDARY, pady=T.PAD_MD)
-        ctrl.pack(fill=tk.X, padx=T.PAD_SM, pady=(T.PAD_SM, 0))
+        row = tk.Frame(self.root, bg=BG, pady=6)
+        row.pack(fill=tk.X, padx=8)
 
-        # Big MIC toggle
-        self._mic_btn = tk.Button(
-            ctrl, text="🎙  START LISTENING  (F8)",
-            bg=T.BG_TERTIARY, fg=T.TEXT_MUTED,
-            font=(T.FONT_FAMILY, 12, "bold"),
-            relief=tk.FLAT, cursor="hand2", pady=14,
-            command=lambda: self.on_toggle_listen and self.on_toggle_listen(),
-        )
-        self._mic_btn.pack(fill=tk.X, padx=T.PAD_MD, pady=(0, T.PAD_SM))
+        tk.Button(
+            row, text="📞  Manual Trigger",
+            bg=ACCENT, fg=FG, font=(FONT, 10, "bold"),
+            relief=tk.FLAT, cursor="hand2", pady=8, padx=16,
+            command=lambda: self.on_manual_trigger and self.on_manual_trigger(),
+        ).pack(side=tk.LEFT, padx=(0, 6))
 
-        # Row 2: Scanner + Mute + Panic
-        row2 = tk.Frame(ctrl, bg=T.BG_SECONDARY)
-        row2.pack(fill=tk.X, padx=T.PAD_MD)
+        tk.Button(
+            row, text="🗑  Clear History",
+            bg=BG3, fg=FG_MUTED, font=(FONT, 10),
+            relief=tk.FLAT, cursor="hand2", pady=8, padx=12,
+            command=lambda: self.on_clear_history and self.on_clear_history(),
+        ).pack(side=tk.LEFT)
 
-        self._scanner_btn = tk.Button(
-            row2, text="📡  SCANNER: OFF  (F10)",
-            bg=T.BG_TERTIARY, fg=T.TEXT_MUTED,
-            font=T.FONT_BODY, relief=tk.FLAT, cursor="hand2", pady=8,
-            command=lambda: self.on_toggle_scanner and self.on_toggle_scanner(),
-        )
-        self._scanner_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, T.PAD_XS))
-
-        self._mute_btn = tk.Button(
-            row2, text="🔊  (F11)",
-            bg=T.BG_TERTIARY, fg=T.TEXT_MUTED,
-            font=T.FONT_BODY, relief=tk.FLAT, cursor="hand2", pady=8,
-            command=lambda: self.on_mute and self.on_mute(), width=10,
-        )
-        self._mute_btn.pack(side=tk.LEFT, padx=T.PAD_XS)
-
-        self._panic_btn = tk.Button(
-            row2, text="🚨 PANIC (F9)",
-            bg=T.ACCENT_RED, fg=T.TEXT_PRIMARY,
-            font=(T.FONT_FAMILY, 10, "bold"), relief=tk.FLAT, cursor="hand2", pady=8,
-            command=lambda: self.on_panic and self.on_panic(), width=14,
-        )
-        self._panic_btn.pack(side=tk.LEFT, padx=(T.PAD_XS, 0))
+        tk.Label(row, text="Say your callsign to activate the dispatcher",
+                 bg=BG, fg=FG_MUTED, font=(FONT, 9)).pack(side=tk.RIGHT, padx=4)
 
     def _build_transcript(self) -> None:
-        tf = tk.Frame(self.root, bg=T.BG_PRIMARY)
-        tf.pack(fill=tk.X, padx=T.PAD_SM, pady=(T.PAD_SM, 0))
+        tf = tk.Frame(self.root, bg=BG)
+        tf.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
 
-        tk.Label(tf, text="LAST HEARD", bg=T.BG_PRIMARY,
-                 fg=T.TEXT_MUTED, font=T.FONT_SMALL).pack(anchor="w")
+        tk.Label(tf, text="CONVERSATION", bg=BG, fg=FG_MUTED,
+                 font=(FONT, 8, "bold")).pack(anchor="w")
 
-        self._transcript_var = tk.StringVar(value="Waiting for speech...")
-        transcript_lbl = tk.Label(
-            tf, textvariable=self._transcript_var,
-            bg=T.BG_SECONDARY, fg=T.TEXT_SECONDARY,
-            font=(T.FONT_MONO, 10), anchor="w",
-            padx=T.PAD_SM, pady=T.PAD_SM,
-            wraplength=WIN_W - 40, justify=tk.LEFT,
-        )
-        transcript_lbl.pack(fill=tk.X)
-
-        # Last trigger highlight
-        self._trigger_var = tk.StringVar(value="No keyword triggered yet.")
-        tk.Label(
-            tf, textvariable=self._trigger_var,
-            bg=T.BG_TERTIARY, fg=T.ACCENT_BLUE_GLOW,
-            font=(T.FONT_FAMILY, 10, "bold"),
-            anchor="w", padx=T.PAD_SM, pady=6,
-        ).pack(fill=tk.X, pady=(T.PAD_XS, 0))
-
-    def _build_log(self) -> None:
-        lf = tk.Frame(self.root, bg=T.BG_PRIMARY)
-        lf.pack(fill=tk.BOTH, expand=True, padx=T.PAD_SM, pady=T.PAD_SM)
-
-        tk.Label(lf, text="TRIGGER LOG", bg=T.BG_PRIMARY,
-                 fg=T.TEXT_MUTED, font=T.FONT_SMALL).pack(anchor="w")
-
-        log_frame = tk.Frame(lf, bg=T.BG_SECONDARY)
+        log_frame = tk.Frame(tf, bg=BG2)
         log_frame.pack(fill=tk.BOTH, expand=True)
 
-        scrollbar = tk.Scrollbar(log_frame, orient=tk.VERTICAL)
+        scrollbar = tk.Scrollbar(log_frame, orient=tk.VERTICAL, bg=BG2)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self._log_text = tk.Text(
-            log_frame,
-            bg=T.BG_SECONDARY, fg=T.TEXT_PRIMARY,
-            font=(T.FONT_MONO, 9),
-            relief=tk.FLAT, state=tk.DISABLED,
+        self._tx_text = tk.Text(
+            log_frame, bg=BG2, fg=FG,
+            font=(MONO, 10), relief=tk.FLAT, state=tk.DISABLED,
             yscrollcommand=scrollbar.set,
-            padx=T.PAD_SM, pady=T.PAD_SM,
-            spacing1=2, spacing3=2,
+            padx=10, pady=8, spacing1=4, spacing3=4,
+            wrap=tk.WORD,
         )
-        self._log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.configure(command=self._log_text.yview)
+        self._tx_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.configure(command=self._tx_text.yview)
 
-        # Text tags
-        self._log_text.tag_configure("time",     foreground=T.TEXT_MUTED)
-        self._log_text.tag_configure("phrase",   foreground=T.ACCENT_BLUE_GLOW)
-        self._log_text.tag_configure("category", foreground=T.ACCENT_GREEN)
-        self._log_text.tag_configure("panic",    foreground=T.ACCENT_RED, font=(T.FONT_MONO, 9, "bold"))
+        self._tx_text.tag_configure("time",     foreground=FG_MUTED, font=(MONO, 8))
+        self._tx_text.tag_configure("officer",  foreground="#85C1E9", font=(MONO, 10, "bold"))
+        self._tx_text.tag_configure("dispatch", foreground="#82E0AA", font=(MONO, 10))
 
     def _build_statusbar(self) -> None:
-        sb = tk.Frame(self.root, bg=T.BG_HEADER, height=26)
+        sb = tk.Frame(self.root, bg=BG2, height=22)
         sb.pack(fill=tk.X, side=tk.BOTTOM)
         sb.pack_propagate(False)
+        tk.Label(sb, text="Powered by Vosk · OpenAI Whisper · GPT-4o-mini · ElevenLabs",
+                 bg=BG2, fg=FG_MUTED, font=(FONT, 7)).pack(side=tk.LEFT, padx=8)
 
-        self._status_mic_lbl = tk.Label(sb, text="● MIC OFF",
-            bg=T.BG_HEADER, fg=T.TEXT_MUTED, font=(T.FONT_FAMILY, 8, "bold"), padx=T.PAD_SM)
-        self._status_mic_lbl.pack(side=tk.LEFT)
+    # ── Public update methods ─────────────────────────────────────────────────
 
-        self._status_scan_lbl = tk.Label(sb, text="● SCANNER OFF",
-            bg=T.BG_HEADER, fg=T.TEXT_MUTED, font=(T.FONT_FAMILY, 8, "bold"), padx=T.PAD_SM)
-        self._status_scan_lbl.pack(side=tk.LEFT)
+    def set_ai_state(self, label: str, color: str) -> None:
+        def _apply():
+            self._state_var.set(label)
+            self._state_lbl.configure(bg=color)
+        self._safe(_apply)
 
-        hints = "[F8] Listen   [F9] Panic   [F10] Scanner   [F11] Mute"
-        tk.Label(sb, text=hints, bg=T.BG_HEADER, fg=T.TEXT_MUTED,
-                 font=(T.FONT_FAMILY, 7)).pack(side=tk.RIGHT, padx=T.PAD_SM)
-
-    # ── Public update methods (called from dispatcher_main.py) ────────────────
-
-    def set_listener_state(self, active: bool) -> None:
-        self._listener_active = active
-        self._safe(lambda: self._apply_listener_state(active))
-
-    def _apply_listener_state(self, active: bool) -> None:
-        if active:
-            self._mic_btn.configure(text="🎙  LISTENING... (F8 to stop)",
-                                    bg=T.ACCENT_GREEN, fg=T.TEXT_PRIMARY)
-            self._status_mic_lbl.configure(text="● MIC LIVE", fg=T.ACCENT_GREEN)
-        else:
-            self._mic_btn.configure(text="🎙  START LISTENING  (F8)",
-                                    bg=T.BG_TERTIARY, fg=T.TEXT_MUTED)
-            self._status_mic_lbl.configure(text="● MIC OFF", fg=T.TEXT_MUTED)
-            self._transcript_var.set("Waiting for speech...")
-
-    def set_scanner_state(self, active: bool) -> None:
-        self._scanner_active = active
-        self._safe(lambda: self._apply_scanner_state(active))
-
-    def _apply_scanner_state(self, active: bool) -> None:
-        if active:
-            self._scanner_btn.configure(text="📡  SCANNER: ON  (F10 to stop)",
-                                         bg=T.ACCENT_BLUE, fg=T.TEXT_PRIMARY)
-            self._status_scan_lbl.configure(text="● SCANNER ON", fg=T.ACCENT_BLUE)
-        else:
-            self._scanner_btn.configure(text="📡  SCANNER: OFF  (F10)",
-                                         bg=T.BG_TERTIARY, fg=T.TEXT_MUTED)
-            self._status_scan_lbl.configure(text="● SCANNER OFF", fg=T.TEXT_MUTED)
-
-    def set_muted(self, muted: bool) -> None:
-        self._muted = muted
-        self._safe(lambda: self._mute_btn.configure(
-            text="🔇  MUTED (F11)" if muted else "🔊  (F11)",
-            fg=T.ACCENT_RED if muted else T.TEXT_MUTED,
-        ))
-
-    def set_transcript(self, text: str) -> None:
-        if text:
-            self._safe(lambda: self._transcript_var.set(f'🎙  "{text}"'))
-
-    def log_trigger(self, phrase: str, category: str) -> None:
-        from datetime import datetime
+    def append_transcript(self, role: str, text: str) -> None:
         ts = datetime.now().strftime("%H:%M:%S")
-        is_panic = category == "panic"
+        prefix = "YOU  " if role == "officer" else "DISP "
 
         def _insert():
-            self._log_text.configure(state=tk.NORMAL)
-            self._log_text.insert("1.0", "\n")
-            cat_tag = "panic" if is_panic else "category"
-            self._log_text.insert("1.0", f"  [{category.upper()}]", cat_tag)
-            self._log_text.insert("1.0", f"  \"{phrase}\"", "phrase")
-            self._log_text.insert("1.0", f"[{ts}]", "time")
-            self._log_text.configure(state=tk.DISABLED)
-            self._trigger_var.set(f'⚡ Last: "{phrase}" → [{category.upper()}]')
-
+            self._tx_text.configure(state=tk.NORMAL)
+            self._tx_text.insert(tk.END, f"\n[{ts}] ", "time")
+            self._tx_text.insert(tk.END, f"{prefix}  {text}", role)
+            self._tx_text.configure(state=tk.DISABLED)
+            self._tx_text.see(tk.END)
         self._safe(_insert)
 
-    def flash_panic(self) -> None:
-        if self._panic_active:
-            return
-        self._panic_active = True
-
-        def _flash():
-            overlay = tk.Toplevel(self.root)
-            overlay.attributes("-topmost", True)
-            overlay.attributes("-alpha", 0.85)
-            overlay.overrideredirect(True)
-            sw = overlay.winfo_screenwidth()
-            sh = overlay.winfo_screenheight()
-            overlay.geometry(f"{sw}x{sh}+0+0")
-            overlay.configure(bg=T.ACCENT_RED)
-            tk.Label(overlay, text="🚨  PANIC — OFFICER NEEDS ASSISTANCE  🚨",
-                     bg=T.ACCENT_RED, fg="white",
-                     font=(T.FONT_FAMILY, 26, "bold")).pack(expand=True)
-            tk.Label(overlay, text="Click anywhere to dismiss",
-                     bg=T.ACCENT_RED, fg="white", font=T.FONT_BODY).pack()
-
-            def dismiss(e=None):
-                self._panic_active = False
-                overlay.destroy()
-
-            overlay.bind("<Button-1>", dismiss)
-            overlay.after(5000, dismiss)
-
-        self._safe(_flash)
-
     def show_error(self, msg: str) -> None:
-        self._safe(lambda: __import__("tkinter.messagebox", fromlist=["showerror"])
-                   .showerror("BlueLineDispatchPro", msg))
+        import tkinter.messagebox as mb
+        self._safe(lambda: mb.showerror("BlueLineDispatchPro", msg))
 
     def _safe(self, fn) -> None:
         try:
