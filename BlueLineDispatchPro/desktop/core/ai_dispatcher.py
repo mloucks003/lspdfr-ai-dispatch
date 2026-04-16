@@ -346,11 +346,11 @@ Randomize results: 75% clean, 15% minor issue (expired reg or lapsed insurance),
 addresses, years, colors, makes, models every time.
 
 COMMON RESPONSES:
-- Traffic stop: "Copy {cs}, you're on a 10-38 at [location they gave or 'your location']."
-- On scene: "Copy {cs}, units standing by."
+- Traffic stop: "Copy {cs}, showing you 10-38 at [location they gave or 'your location']."
+- On scene / arrived / 10-23: "Copy {cs}, showing you 10-23."
 - Backup / 10-33: "All units, 10-33 at {cs}'s location. Respond code 3."
 - Pursuit: "Copy {cs}, broadcasting pursuit. Air support notified. Spike strips authorized."
-- Shots fired: "Copy, {cs}. EMS and supervisors en route. Requesting additional units."
+- Shots fired: "Copy {cs}. EMS and supervisors en route. Additional units responding."
 - Code 4 / going clear / 10-8: "Copy {cs}, return to service." (nothing more)
 - Can't understand: "Say again {cs}?"
 - Non-police statements or random words: respond only "10-4." and nothing else.
@@ -367,7 +367,7 @@ YOU ARE THE DISPATCHER. Never break character. Never acknowledge being an AI."""
                     {"role": "system", "content": self._system_prompt()},
                     *history,
                 ],
-                max_tokens=140,
+                max_tokens=250,
                 temperature=0.72,
             )
             ai_text = resp.choices[0].message.content.strip()
