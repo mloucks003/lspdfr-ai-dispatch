@@ -75,8 +75,8 @@ class DispatcherWindow:
 
         self._state_lbl = tk.Label(
             self.root, textvariable=self._state_var,
-            bg="#3A3A5A", fg=FG,
-            font=(FONT, 12, "bold"), pady=14, padx=12, anchor="w",
+            bg="#2C2C4A", fg=FG,
+            font=(FONT, 12, "bold"), pady=16, padx=12, anchor="w",
         )
         self._state_lbl.pack(fill=tk.X, padx=8, pady=(8, 0))
 

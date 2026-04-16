@@ -2,8 +2,10 @@
 BlueLineDispatchPro — AI Dispatcher Engine
 
 Flow:
-  [Vosk always listening] → callsign heard → "Sam-44, go ahead Sam-44."
-  → record until silence → Whisper STT → GPT-4o-mini → ElevenLabs + radio FX
+  IDLE: Vosk watches for callsign
+  SESSION: Full back-and-forth conversation — no callsign needed
+    → dispatcher speaks → auto-listens → officer speaks → repeat
+    → session closes after SESSION_TIMEOUT seconds of silence
 """
 import io
 import json
@@ -20,18 +22,20 @@ from scipy import signal as sp
 
 logger = logging.getLogger(__name__)
 
-SAMPLE_RATE  = 16000
-CHUNK_FRAMES = 4000   # 250 ms per chunk
+SAMPLE_RATE     = 16000
+CHUNK_FRAMES    = 3200   # 200 ms per chunk
+SESSION_TIMEOUT = 20.0   # seconds of silence before session closes
 
 
 class AIDispatcher:
 
     STATES = {
-        "idle":          ("🎙  Listening for callsign...",     "#3A3A5A"),
-        "acknowledging": ("📡  Dispatching acknowledgment...", "#2471A3"),
-        "listening":     ("🔴  Recording — go quiet when done","#C0392B"),
-        "processing":    ("⚙   Processing transmission...",   "#D35400"),
-        "responding":    ("📻  Dispatcher responding...",      "#1E8449"),
+        "idle":          ("🎙  Listening for callsign...",          "#2C2C4A"),
+        "acknowledging": ("📡  Opening channel...",                 "#1A4A7A"),
+        "listening":     ("🔴  Listening — go quiet when done",     "#7A1A1A"),
+        "processing":    ("⚙   Processing...",                     "#7A3A00"),
+        "responding":    ("📻  Dispatcher responding...",           "#1A5C2E"),
+        "session_wait":  ("🟡  Channel open — speak when ready",    "#4A3A00"),
     }
 
     def __init__(self, config: dict):
@@ -41,23 +45,29 @@ class AIDispatcher:
         self._variants = [v.lower() for v in
                           config.get("callsign_variants",
                                      [self.callsign.lower().replace("-", " ")])]
-        self._silence_thresh     = int(config.get("silence_threshold", 400))
-        self._silence_end_chunks = int(
-            float(config.get("silence_end_seconds", 1.8)) * SAMPLE_RATE / CHUNK_FRAMES)
-        self._max_record_chunks  = int(
-            float(config.get("max_record_seconds", 25)) * SAMPLE_RATE / CHUNK_FRAMES)
 
-        self._state   = "idle"
-        self._running = False
-        self._stream  = None
-        self._audio_q: queue.Queue = queue.Queue()
+        # VAD tuning
+        self._speech_thresh      = int(config.get("speech_threshold",   300))
+        self._silence_thresh     = int(config.get("silence_threshold",  200))
+        self._silence_end_chunks = int(
+            float(config.get("silence_end_seconds", 1.5)) * SAMPLE_RATE / CHUNK_FRAMES)
+        self._max_record_chunks  = int(
+            float(config.get("max_record_seconds", 20)) * SAMPLE_RATE / CHUNK_FRAMES)
+        self._session_timeout_chunks = int(
+            SESSION_TIMEOUT * SAMPLE_RATE / CHUNK_FRAMES)
+
+        self._state      = "idle"
+        self._in_session = False   # True when channel is open
+        self._running    = False
+        self._stream     = None
+        self._audio_q: queue.Queue = queue.Queue(maxsize=200)
         self._conversation: list   = []
 
         # Public callbacks — wired by dispatcher_main.py
-        self.on_state_change      = None   # fn(state_key, label, color)
-        self.on_user_speech       = None   # fn(text)
-        self.on_dispatcher_speech = None   # fn(text)
-        self.on_error             = None   # fn(msg)
+        self.on_state_change      = None
+        self.on_user_speech       = None
+        self.on_dispatcher_speech = None
+        self.on_error             = None
 
         from openai import OpenAI
         self._openai   = OpenAI(api_key=config["openai_api_key"])
@@ -83,6 +93,7 @@ class AIDispatcher:
             callback=self._audio_callback,
         )
         self._stream.start()
+        # Single dedicated thread owns all audio consumption
         threading.Thread(target=self._main_loop, daemon=True,
                          name="dispatcher").start()
         logger.info(f"AIDispatcher started — listening for '{self.callsign}'")
@@ -94,31 +105,48 @@ class AIDispatcher:
             self._stream.close()
 
     def manual_trigger(self):
-        """Fallback button — activate as if callsign was heard."""
+        """Button fallback — open a session as if callsign was heard."""
         if self._state == "idle":
-            threading.Thread(target=self._do_callsign_detected,
+            threading.Thread(target=self._run_session,
                              daemon=True).start()
 
     def clear_history(self):
         self._conversation.clear()
+        logger.info("Conversation history cleared")
 
     # ── Audio ─────────────────────────────────────────────────────────────────
 
     def _audio_callback(self, indata, frames, time_info, status):
-        self._audio_q.put(indata.copy().flatten())
+        try:
+            self._audio_q.put_nowait(indata.copy().flatten())
+        except queue.Full:
+            pass  # drop chunk if queue is backed up
 
-    def _get_chunk(self) -> np.ndarray:
-        return self._audio_q.get()
+    def _flush_queue(self):
+        while not self._audio_q.empty():
+            try:
+                self._audio_q.get_nowait()
+            except queue.Empty:
+                break
 
-    # ── Main loop ─────────────────────────────────────────────────────────────
+    # ── Main loop — THE only consumer of audio ────────────────────────────────
 
     def _main_loop(self):
-        """Single thread reads all audio — Vosk when idle, records when listening."""
+        """
+        Single thread owns the audio queue.
+        In idle mode:  feeds chunks to Vosk for callsign detection.
+        In session:    runs the full conversation loop inline.
+        """
         while self._running:
             try:
-                chunk = self._get_chunk()
+                chunk = self._audio_q.get(timeout=0.5)
                 if self._state == "idle":
                     self._vosk_feed(chunk)
+                # All other states: chunks are consumed by _read_chunk_session()
+                # which is called from within the session loop below.
+                # We only reach here in idle, so non-idle chunks are handled there.
+            except queue.Empty:
+                continue
             except Exception as e:
                 logger.error(f"Main loop: {e}")
 
@@ -126,75 +154,117 @@ class AIDispatcher:
         self._vosk_rec.AcceptWaveform(chunk.tobytes())
         partial = json.loads(self._vosk_rec.PartialResult()).get("partial", "")
         if partial and any(v in partial.lower() for v in self._variants):
-            self._vosk_rec.Result()   # reset so it doesn't re-trigger
-            threading.Thread(target=self._do_callsign_detected,
-                             daemon=True).start()
-
-    # ── Callsign detected ─────────────────────────────────────────────────────
-
-    def _do_callsign_detected(self):
-        try:
+            self._vosk_rec.Result()  # reset
             self._set_state("acknowledging")
+            # Hand off to session — runs in main_loop thread inline
+            self._run_session()
+
+    # ── Session — full conversation loop ──────────────────────────────────────
+
+    def _run_session(self):
+        """
+        Opens a radio channel. Acknowledges, then loops:
+          listen → process → respond → listen → ...
+        until SESSION_TIMEOUT seconds of silence, then returns to idle.
+        """
+        self._in_session = True
+        try:
+            # Opening acknowledgment
             ack = f"{self.callsign}, go ahead {self.callsign}."
             self._speak(ack)
             if self.on_dispatcher_speech:
                 self.on_dispatcher_speech(ack)
 
-            time.sleep(0.25)   # let mic settle after speaker
+            while self._running:
+                # Small pause + flush after speaking so mic settles
+                time.sleep(0.3)
+                self._flush_queue()
 
-            # Flush stale audio queued during acknowledgment
-            while not self._audio_q.empty():
-                self._audio_q.get_nowait()
+                self._set_state("session_wait")
+                audio = self._wait_for_speech_then_record()
 
-            self._set_state("listening")
-            audio = self._record_until_silence()
+                if audio is None:
+                    # Session timed out — close channel
+                    logger.info("Session timed out, returning to idle")
+                    break
 
-            self._set_state("processing")
+                self._set_state("processing")
+                text = self._transcribe(audio)
+                logger.info(f"[{self.callsign}]: {text!r}")
 
-            if audio is None or np.abs(audio).mean() < 40:
-                self._speak(f"Say again {self.callsign}?")
-                return
+                if not text or len(text.strip()) < 3:
+                    reply = f"Say again {self.callsign}?"
+                    self._set_state("responding")
+                    if self.on_dispatcher_speech:
+                        self.on_dispatcher_speech(reply)
+                    self._speak(reply)
+                    continue
 
-            text = self._transcribe(audio)
-            logger.info(f"[{self.callsign}]: {text!r}")
+                if self.on_user_speech:
+                    self.on_user_speech(text)
 
-            if not text or len(text.strip()) < 3:
-                self._speak(f"Say again {self.callsign}?")
-                return
+                ai_text = self._get_ai_response(text)
+                logger.info(f"[DISPATCH]: {ai_text!r}")
 
-            if self.on_user_speech:
-                self.on_user_speech(text)
-
-            ai_text = self._get_ai_response(text)
-            logger.info(f"[DISPATCH]: {ai_text!r}")
-
-            self._set_state("responding")
-            if self.on_dispatcher_speech:
-                self.on_dispatcher_speech(ai_text)
-            self._speak(ai_text)
+                self._set_state("responding")
+                if self.on_dispatcher_speech:
+                    self.on_dispatcher_speech(ai_text)
+                self._speak(ai_text)
 
         except Exception as e:
-            logger.error(f"Callsign flow: {e}")
+            logger.error(f"Session error: {e}")
             if self.on_error:
                 self.on_error(str(e))
         finally:
+            self._in_session = False
             self._set_state("idle")
+            self._flush_queue()
 
-    # ── VAD recording ─────────────────────────────────────────────────────────
+    # ── VAD — wait for speech onset, then record until silence ───────────────
 
-    def _record_until_silence(self) -> np.ndarray | None:
-        buffer, speech_heard, silent_chunks = [], False, 0
-        for _ in range(self._max_record_chunks):
-            chunk = self._get_chunk()
-            buffer.append(chunk)
-            rms = np.sqrt(np.mean(chunk.astype(np.float32) ** 2))
-            if rms >= self._silence_thresh:
-                speech_heard  = True
-                silent_chunks = 0
-            elif speech_heard:
-                silent_chunks += 1
-                if silent_chunks >= self._silence_end_chunks:
+    def _wait_for_speech_then_record(self) -> np.ndarray | None:
+        """
+        Phase 1: wait up to SESSION_TIMEOUT for speech to start.
+        Phase 2: record until 1.5s of silence after speech ends.
+        Returns int16 array, or None if session timed out.
+        """
+        buffer        = []
+        speech_heard  = False
+        silent_chunks = 0
+        timeout_count = 0
+
+        while self._running:
+            try:
+                chunk = self._audio_q.get(timeout=0.5)
+            except queue.Empty:
+                if not self._running:
+                    return None
+                continue
+
+            rms = int(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
+
+            if not speech_heard:
+                # Waiting for speech onset
+                if rms >= self._speech_thresh:
+                    speech_heard = True
+                    buffer = [chunk]
+                    self._set_state("listening")
+                else:
+                    timeout_count += 1
+                    if timeout_count >= self._session_timeout_chunks:
+                        return None   # nobody spoke — close session
+            else:
+                # Recording
+                buffer.append(chunk)
+                if rms >= self._silence_thresh:
+                    silent_chunks = 0
+                else:
+                    silent_chunks += 1
+                    if silent_chunks >= self._silence_end_chunks:
+                        break
+                if len(buffer) >= self._max_record_chunks:
                     break
+
         return np.concatenate(buffer).astype(np.int16) if buffer else None
 
     # ── Whisper STT ───────────────────────────────────────────────────────────
