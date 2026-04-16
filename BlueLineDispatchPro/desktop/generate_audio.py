@@ -247,16 +247,31 @@ DEFAULT_VOICE = "en-US-AriaNeural"
 
 # ── Generation logic ──────────────────────────────────────────────────────────
 
-async def generate_mp3(text: str, out_path: Path, voice: str) -> bool:
-    """Generate a single MP3 file via edge-tts."""
-    try:
-        import edge_tts
-        communicate = edge_tts.Communicate(text, voice)
-        await communicate.save(str(out_path))
-        return True
-    except Exception as e:
-        print(f"  ✗ edge-tts error: {e}")
-        return False
+async def generate_mp3(text: str, out_path: Path, voice: str, retries: int = 4) -> bool:
+    """Generate a single MP3 file via edge-tts with retry + backoff."""
+    import edge_tts
+    for attempt in range(1, retries + 1):
+        try:
+            communicate = edge_tts.Communicate(text, voice)
+            await communicate.save(str(out_path))
+            # Sanity check — reject empty or tiny files (failed silently)
+            if out_path.exists() and out_path.stat().st_size > 1024:
+                return True
+            else:
+                if out_path.exists():
+                    out_path.unlink()
+                raise ValueError("Output file too small — likely a silent failure")
+        except Exception as e:
+            if out_path.exists():
+                out_path.unlink()  # always clean up bad files
+            if attempt < retries:
+                wait = 3 * attempt  # 3s, 6s, 9s backoff
+                print(f"  ↺ Retry {attempt}/{retries - 1} in {wait}s... ({e})")
+                await asyncio.sleep(wait)
+            else:
+                print(f"  ✗ Failed after {retries} attempts: {e}")
+                return False
+    return False
 
 
 def mp3_to_wav(mp3_path: Path, wav_path: Path) -> bool:
@@ -270,11 +285,9 @@ def mp3_to_wav(mp3_path: Path, wav_path: Path) -> bool:
         mp3_path.unlink()
         return True
     except Exception as e:
-        print(f"  ✗ MP3→WAV conversion failed: {e}")
-        print("    Make sure ffmpeg is installed: https://ffmpeg.org/download.html")
-        print("    Windows: winget install Gyan.FFmpeg")
-        # Keep as MP3 — the app can play MP3 via pydub too
-        mp3_path.rename(wav_path.with_suffix(".mp3"))
+        print(f"  ✗ MP3→WAV failed: {e}")
+        if mp3_path.exists():
+            mp3_path.unlink()  # delete corrupt file — don't keep it
         return False
 
 
@@ -284,31 +297,39 @@ async def generate_category(category: str, phrases: list, audio_dir: Path,
     cat_dir = audio_dir / category
     cat_dir.mkdir(parents=True, exist_ok=True)
 
+    # Clean up any leftover temp files from a previous failed run
+    for tmp in cat_dir.glob("_tmp_*.mp3"):
+        tmp.unlink()
+
     generated = 0
     for i, phrase in enumerate(phrases, start=start_index):
         wav_path = cat_dir / f"{i:02d}.wav"
         mp3_path = cat_dir / f"{i:02d}.mp3"
 
-        # Skip if file already exists
-        if wav_path.exists() or mp3_path.exists():
-            print(f"  ⏭  {i:02d}.wav already exists — skipping")
+        # Skip if file already exists and is valid size
+        if wav_path.exists() and wav_path.stat().st_size > 1024:
+            print(f"  ⏭  {i:02d}.wav exists — skipping")
+            generated += 1
+            continue
+        if mp3_path.exists() and mp3_path.stat().st_size > 1024:
+            print(f"  ⏭  {i:02d}.mp3 exists — skipping")
             generated += 1
             continue
 
-        print(f"  🎙  [{i:02d}] {phrase[:70]}{'...' if len(phrase) > 70 else ''}")
+        print(f"  🎙  [{i:02d}] {phrase[:72]}{'...' if len(phrase) > 72 else ''}")
 
-        # Generate to temp MP3 first
         temp_mp3 = cat_dir / f"_tmp_{i:02d}.mp3"
         ok = await generate_mp3(phrase, temp_mp3, voice)
         if not ok:
+            print(f"  ⚠  Skipping [{i:02d}] — will retry next run")
             continue
 
-        # Convert to WAV
-        mp3_to_wav(temp_mp3, wav_path)
-        generated += 1
+        if mp3_to_wav(temp_mp3, wav_path):
+            generated += 1
+        # else: file deleted, will retry next run
 
-        # Small delay to be polite to the edge-tts service
-        await asyncio.sleep(0.4)
+        # Polite delay between requests — avoids 403 rate limiting
+        await asyncio.sleep(1.5)
 
     return generated
 
