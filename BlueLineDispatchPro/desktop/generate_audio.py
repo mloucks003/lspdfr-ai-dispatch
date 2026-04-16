@@ -1,16 +1,20 @@
 """
 BlueLineDispatchPro — Dispatcher Audio Generator
-Generates dispatcher audio using Windows SAPI via PowerShell.
-100% offline — no internet, no API keys, no rate limits, no freeze issues.
 
-Usage:
-    python generate_audio.py
-    python generate_audio.py --voice David
-    python generate_audio.py --category plate
-    python generate_audio.py --list-voices
+Modes:
+  ElevenLabs (default, best quality):
+      python generate_audio.py --api-key YOUR_KEY
+      python generate_audio.py --api-key YOUR_KEY --list-voices
+      python generate_audio.py --api-key YOUR_KEY --voice-id VOICE_ID --category plate
+
+  Offline fallback (Windows SAPI, no internet):
+      python generate_audio.py --offline
+      python generate_audio.py --offline --voice Zira
 """
 import argparse
 import subprocess
+import time
+import requests
 from pathlib import Path
 
 # ── All dispatcher phrases by category ───────────────────────────────────────
@@ -226,7 +230,122 @@ PHRASES = {
     ],
 }
 
-# ── PowerShell SAPI generation (reliable, no freeze, no internet) ─────────────
+# ── ElevenLabs voices (curated for dispatcher use) ───────────────────────────
+ELEVENLABS_VOICES = {
+    "rachel":  ("21m00Tcm4TlvDq8ikWAM", "Rachel  — professional female, neutral American (BEST)"),
+    "matilda": ("XrExE9yKIg1WjnnlVkGX", "Matilda — warm female, authoritative"),
+    "sarah":   ("EXAVITQu4vr4xnSDxMaL", "Sarah   — clear, bright female"),
+    "nicole":  ("piTKgcLEGmPE4e6mEKli", "Nicole  — calm, composed female"),
+    "aria":    ("9BWtsMINqrJLrRacOk9x", "Aria    — natural, expressive female"),
+    "marcus":  ("iP95p4xoKVk53GoZ742B", "Marcus  — deep male dispatcher"),
+}
+DEFAULT_ELEVENLABS_VOICE = "rachel"
+ELEVENLABS_MODEL         = "eleven_multilingual_v2"   # highest quality
+
+# Voice settings tuned for dispatcher + radio effect processing
+VOICE_SETTINGS = {
+    "stability":         0.52,   # slight natural variation between takes
+    "similarity_boost":  0.75,
+    "style":             0.08,   # very subtle expressiveness
+    "use_speaker_boost": True,
+}
+
+# ── ElevenLabs generation ─────────────────────────────────────────────────────
+
+def el_generate_wav(text: str, wav_path: Path, api_key: str,
+                    voice_id: str, retries: int = 3) -> bool:
+    """Call ElevenLabs TTS API and save result as WAV."""
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+    headers = {"xi-api-key": api_key, "Content-Type": "application/json"}
+    payload = {
+        "text": text,
+        "model_id": ELEVENLABS_MODEL,
+        "voice_settings": VOICE_SETTINGS,
+    }
+
+    for attempt in range(1, retries + 1):
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=30)
+            if resp.status_code == 200:
+                # ElevenLabs returns MP3 by default — convert to WAV
+                mp3_path = wav_path.with_suffix(".mp3")
+                mp3_path.write_bytes(resp.content)
+                from pydub import AudioSegment
+                audio = (AudioSegment.from_mp3(str(mp3_path))
+                         .set_channels(1).set_frame_rate(44100).set_sample_width(2))
+                audio.export(str(wav_path), format="wav")
+                mp3_path.unlink()
+                return True
+            elif resp.status_code == 429:
+                wait = 5 * attempt
+                print(f"  ↺ Rate limited — waiting {wait}s...")
+                time.sleep(wait)
+            else:
+                print(f"  ✗ ElevenLabs {resp.status_code}: {resp.text[:120]}")
+                return False
+        except Exception as e:
+            print(f"  ✗ Error: {e}")
+            if attempt < retries:
+                time.sleep(3)
+    return False
+
+
+def el_list_voices(api_key: str) -> None:
+    """Print all voices available on the account."""
+    resp = requests.get(
+        "https://api.elevenlabs.io/v1/voices",
+        headers={"xi-api-key": api_key},
+    )
+    if resp.status_code != 200:
+        print(f"Error: {resp.status_code} — {resp.text}")
+        return
+    voices = resp.json().get("voices", [])
+    print(f"\n  {'NAME':<28} {'VOICE ID':<30} CATEGORY")
+    print(f"  {'-'*80}")
+    for v in voices:
+        print(f"  {v['name']:<28} {v['voice_id']:<30} {v.get('category','')}")
+    print(f"\n  Total: {len(voices)} voices\n")
+
+
+def el_get_usage(api_key: str) -> None:
+    """Show character usage for the current billing period."""
+    resp = requests.get(
+        "https://api.elevenlabs.io/v1/user/subscription",
+        headers={"xi-api-key": api_key},
+    )
+    if resp.status_code == 200:
+        sub = resp.json()
+        used  = sub.get("character_count", 0)
+        limit = sub.get("character_limit", 0)
+        plan  = sub.get("tier", "unknown")
+        print(f"  Plan: {plan}  |  Characters used: {used:,} / {limit:,}")
+    else:
+        print(f"  Could not fetch usage: {resp.status_code}")
+
+
+def el_generate_category(category: str, phrases: list, audio_dir: Path,
+                          api_key: str, voice_id: str) -> int:
+    """Generate one category via ElevenLabs. Returns file count."""
+    cat_dir = audio_dir / category
+    cat_dir.mkdir(parents=True, exist_ok=True)
+
+    generated = 0
+    for i, phrase in enumerate(phrases, start=1):
+        wav_path = cat_dir / f"{i:02d}.wav"
+        if wav_path.exists() and wav_path.stat().st_size > 512:
+            print(f"  ⏭  {i:02d}.wav exists — skipping")
+            generated += 1
+            continue
+
+        print(f"  🎙  [{i:02d}] {phrase[:74]}{'...' if len(phrase)>74 else ''}")
+        if el_generate_wav(phrase, wav_path, api_key, voice_id):
+            generated += 1
+        time.sleep(0.3)   # gentle pacing — well within rate limits
+
+    return generated
+
+
+# ── PowerShell SAPI offline fallback ─────────────────────────────────────────
 
 def build_powershell_script(categories: dict, audio_dir: Path, voice_hint: str) -> str:
     """Build a single PowerShell script that generates all WAV files at once."""
@@ -307,64 +426,109 @@ def list_voices() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate dispatcher audio using Windows SAPI (offline)"
+        description="Generate BlueLineDispatchPro dispatcher audio"
     )
-    parser.add_argument(
-        "--voice", type=str, default="Zira",
-        help="Voice name fragment to search for (default: Zira). Use --list-voices to see all."
-    )
-    parser.add_argument(
-        "--category", type=str, default=None,
+    parser.add_argument("--api-key",    type=str,  default=None,
+        help="ElevenLabs API key (uses online neural TTS — best quality)")
+    parser.add_argument("--voice-id",   type=str,  default=None,
+        help="ElevenLabs voice ID. Default: Rachel. Use --list-voices to browse.")
+    parser.add_argument("--voice-name", type=str,  default=DEFAULT_ELEVENLABS_VOICE,
+        choices=list(ELEVENLABS_VOICES.keys()),
+        help=f"Named voice shortcut (default: {DEFAULT_ELEVENLABS_VOICE})")
+    parser.add_argument("--offline",    action="store_true",
+        help="Use Windows SAPI instead of ElevenLabs (no internet, lower quality)")
+    parser.add_argument("--sapi-voice", type=str,  default="Zira",
+        help="Windows SAPI voice name fragment for --offline mode (default: Zira)")
+    parser.add_argument("--category",   type=str,  default=None,
         choices=list(PHRASES.keys()),
-        help="Generate only one category (default: all)"
-    )
-    parser.add_argument(
-        "--list-voices", action="store_true",
-        help="List available Windows TTS voices and exit"
-    )
+        help="Generate only one category (default: all)")
+    parser.add_argument("--list-voices", action="store_true",
+        help="List available voices (ElevenLabs if --api-key given, else Windows SAPI)")
+    parser.add_argument("--usage",      action="store_true",
+        help="Show ElevenLabs character usage for current billing period")
     args = parser.parse_args()
 
-    if args.list_voices:
-        list_voices()
-        return
-
-    base_dir   = Path(__file__).parent
-    audio_dir  = base_dir / "audio"
+    base_dir  = Path(__file__).parent
+    audio_dir = base_dir / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
 
+    # ── List voices ───────────────────────────────────────────────────────────
+    if args.list_voices:
+        if args.api_key:
+            print("\n  ElevenLabs voices on your account:\n")
+            el_list_voices(args.api_key)
+        else:
+            print("\n  Built-in recommended voices (use --voice-name):\n")
+            for k, (vid, desc) in ELEVENLABS_VOICES.items():
+                print(f"  {k:<10}  {desc}")
+            print("\n  Windows SAPI voices (for --offline mode):\n")
+            list_voices()
+        return
+
+    if args.usage and args.api_key:
+        el_get_usage(args.api_key)
+        return
+
     categories = (
-        {args.category: PHRASES[args.category]}
-        if args.category else PHRASES
+        {args.category: PHRASES[args.category]} if args.category else dict(PHRASES)
     )
     total = sum(len(v) for v in categories.values())
 
-    print(f"\n{'='*60}")
-    print(f"  BlueLineDispatchPro — Dispatcher Audio Generator")
-    print(f"  Engine: Windows SAPI (offline, no internet, no freeze)")
-    print(f"  Voice:  {args.voice}")
-    print(f"  Total:  {total} phrases → {audio_dir}")
-    print(f"{'='*60}\n")
+    # ── ElevenLabs mode ───────────────────────────────────────────────────────
+    if args.api_key and not args.offline:
+        voice_id = args.voice_id or ELEVENLABS_VOICES[args.voice_name][0]
+        voice_desc = (args.voice_id or
+                      f"{args.voice_name} — {ELEVENLABS_VOICES[args.voice_name][1]}")
 
-    script     = build_powershell_script(categories, audio_dir, args.voice)
-    ps1_path   = base_dir / "_bldp_generate.ps1"
+        print(f"\n{'='*60}")
+        print(f"  BlueLineDispatchPro — Dispatcher Audio Generator")
+        print(f"  Engine:  ElevenLabs ({ELEVENLABS_MODEL})")
+        print(f"  Voice:   {voice_desc}")
+        print(f"  Total:   {total} phrases")
+        print(f"{'='*60}")
+        el_get_usage(args.api_key)
+        print()
 
-    print("  Running PowerShell... (this window will show progress)\n")
-    ok = run_powershell_script(script, ps1_path)
+        total_generated = 0
+        for cat, phrases in categories.items():
+            print(f"\n📁  [{cat.upper()}]  ({len(phrases)} phrases)")
+            n = el_generate_category(cat, phrases, audio_dir, args.api_key, voice_id)
+            total_generated += n
+            print(f"  ✓ {n} files in audio/{cat}/")
 
-    # Count generated files
-    generated = sum(
-        1 for cat in categories
-        for f in (audio_dir / cat).glob("*.wav")
-        if f.stat().st_size > 512
-    )
+        print(f"\n{'='*60}")
+        print(f"  ✅  Done! {total_generated} WAV files generated.")
+        el_get_usage(args.api_key)
+        print(f"{'='*60}")
+        print("\n  Run:  python dispatcher_main.py\n")
 
-    print(f"\n{'='*60}")
-    if ok:
-        print(f"  Done! {generated} WAV files in {audio_dir}")
+    # ── Offline SAPI fallback ─────────────────────────────────────────────────
     else:
-        print(f"  Finished with warnings. {generated} files present.")
-    print(f"{'='*60}")
-    print("\n  Run:  python dispatcher_main.py\n")
+        if not args.offline and not args.api_key:
+            print("\n  ⚠  No --api-key given. Falling back to offline Windows SAPI.")
+            print("     For best quality run:  python generate_audio.py --api-key YOUR_KEY\n")
+
+        print(f"\n{'='*60}")
+        print(f"  BlueLineDispatchPro — Dispatcher Audio Generator")
+        print(f"  Engine:  Windows SAPI (offline)")
+        print(f"  Voice:   {args.sapi_voice}")
+        print(f"  Total:   {total} phrases")
+        print(f"{'='*60}\n")
+
+        script   = build_powershell_script(categories, audio_dir, args.sapi_voice)
+        ps1_path = base_dir / "_bldp_generate.ps1"
+        print("  Running PowerShell...\n")
+        run_powershell_script(script, ps1_path)
+
+        generated = sum(
+            1 for cat in categories
+            for f in (audio_dir / cat).glob("*.wav")
+            if f.stat().st_size > 512
+        )
+        print(f"\n{'='*60}")
+        print(f"  Done! {generated} WAV files in {audio_dir}")
+        print(f"{'='*60}")
+        print("\n  Run:  python dispatcher_main.py\n")
 
 
 if __name__ == "__main__":
