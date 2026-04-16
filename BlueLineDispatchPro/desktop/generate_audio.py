@@ -1,20 +1,16 @@
 """
 BlueLineDispatchPro — Dispatcher Audio Generator
-Generates dispatcher audio using Windows built-in TTS (pyttsx3).
-100% offline — no internet, no API keys, no rate limits.
+Generates dispatcher audio using Windows SAPI via PowerShell.
+100% offline — no internet, no API keys, no rate limits, no freeze issues.
 
 Usage:
     python generate_audio.py
-    python generate_audio.py --voice Zira
+    python generate_audio.py --voice David
     python generate_audio.py --category plate
     python generate_audio.py --list-voices
-
-Requires:
-    pip install pyttsx3
 """
-import os
-import sys
 import argparse
+import subprocess
 from pathlib import Path
 
 # ── All dispatcher phrases by category ───────────────────────────────────────
@@ -230,110 +226,89 @@ PHRASES = {
     ],
 }
 
-# ── Engine setup ──────────────────────────────────────────────────────────────
+# ── PowerShell SAPI generation (reliable, no freeze, no internet) ─────────────
 
-def create_engine(preferred_voice: str = None):
-    """Create and configure a pyttsx3 TTS engine."""
-    import pyttsx3
-    engine = pyttsx3.init()
-    engine.setProperty('rate', 152)    # Slightly slower — clearer for radio
-    engine.setProperty('volume', 0.95)
+def build_powershell_script(categories: dict, audio_dir: Path, voice_hint: str) -> str:
+    """Build a single PowerShell script that generates all WAV files at once."""
+    lines = [
+        "$ErrorActionPreference = 'Continue'",
+        "$tts = New-Object -ComObject SAPI.SpVoice",
+        "$tts.Rate = -2",
+        "# Select voice",
+        "$chosenVoice = $null",
+        f"foreach ($v in $tts.GetVoices()) {{",
+        f"    if ($v.GetDescription() -like '*{voice_hint}*') {{ $chosenVoice = $v; break }}",
+        "}",
+        "if ($chosenVoice) { $tts.Voice = $chosenVoice }",
+        "Write-Host ('  Voice: ' + $tts.Voice.GetDescription())",
+        "",
+        "function Write-Wav($text, $path) {",
+        "    if ((Test-Path $path) -and ((Get-Item $path).Length -gt 512)) {",
+        "        Write-Host \"  skip  $([System.IO.Path]::GetFileName($path))\"",
+        "        return",
+        "    }",
+        "    $stream = New-Object -ComObject SAPI.SpFileStream",
+        "    $stream.Open($path, 3, $false)",
+        "    $tts.AudioOutputStream = $stream",
+        "    $tts.Speak($text)",
+        "    $stream.Close()",
+        "    Write-Host \"  ok    $([System.IO.Path]::GetFileName($path))\"",
+        "}",
+        "",
+    ]
 
-    voices = engine.getProperty('voices')
-    selected = None
+    for cat, phrases in categories.items():
+        cat_dir = audio_dir / cat
+        win_dir = str(cat_dir).replace("\\", "\\\\")
+        lines.append(f'Write-Host "`n[{cat.upper()}]"')
+        lines.append(f'New-Item -ItemType Directory -Force -Path "{win_dir}" | Out-Null')
+        for i, phrase in enumerate(phrases, start=1):
+            wav_path = cat_dir / f"{i:02d}.wav"
+            win_path = str(wav_path).replace("\\", "\\\\")
+            # Escape double-quotes inside the phrase for PowerShell
+            safe = phrase.replace('"', '`"').replace("'", "\\'")
+            lines.append(f'Write-Wav "{safe}" "{win_path}"')
+        lines.append("")
 
-    if preferred_voice:
-        for v in voices:
-            if preferred_voice.lower() in v.name.lower():
-                selected = v
-                break
-        if not selected:
-            print(f"  ⚠  Voice '{preferred_voice}' not found, using default.")
-
-    if not selected:
-        # Prefer Zira (female) — sounds most like a dispatcher
-        for v in voices:
-            if 'zira' in v.name.lower():
-                selected = v
-                break
-    if not selected and voices:
-        selected = voices[0]
-
-    if selected:
-        engine.setProperty('voice', selected.id)
-        print(f"  Voice: {selected.name}")
-
-    return engine
+    lines.append('Write-Host "`n Done!"')
+    return "\n".join(lines)
 
 
-def generate_wav(text: str, wav_path: Path, engine) -> bool:
-    """Generate a single WAV file. Returns True on success."""
+def run_powershell_script(script: str, script_path: Path) -> bool:
+    """Write and execute a PowerShell script file."""
+    script_path.write_text(script, encoding="utf-8")
     try:
-        engine.save_to_file(text, str(wav_path))
-        engine.runAndWait()
-        if wav_path.exists() and wav_path.stat().st_size > 512:
-            return True
-        if wav_path.exists():
-            wav_path.unlink()
-        return False
-    except Exception as e:
-        print(f"  ✗ TTS error: {e}")
-        if wav_path.exists():
-            wav_path.unlink()
-        return False
-
-
-def generate_category(category: str, phrases: list, audio_dir: Path, engine) -> int:
-    """Generate all phrases for one category. Skips existing files."""
-    cat_dir = audio_dir / category
-    cat_dir.mkdir(parents=True, exist_ok=True)
-
-    # Clean up any leftover temp files
-    for tmp in cat_dir.glob("_tmp_*"):
-        tmp.unlink()
-
-    generated = 0
-    for i, phrase in enumerate(phrases, start=1):
-        wav_path = cat_dir / f"{i:02d}.wav"
-
-        if wav_path.exists() and wav_path.stat().st_size > 512:
-            print(f"  ⏭  {i:02d}.wav exists — skipping")
-            generated += 1
-            continue
-
-        print(f"  🎙  [{i:02d}] {phrase[:74]}{'...' if len(phrase) > 74 else ''}")
-        if generate_wav(phrase, wav_path, engine):
-            generated += 1
-
-    return generated
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", str(script_path),
+            ],
+            text=True,
+        )
+        return result.returncode == 0
+    finally:
+        if script_path.exists():
+            script_path.unlink()
 
 
 def list_voices() -> None:
-    """Print all available Windows TTS voices."""
-    import pyttsx3
-    engine = pyttsx3.init()
-    voices = engine.getProperty('voices')
-    print(f"\n  {'NAME':<45}  ID")
-    print(f"  {'-'*80}")
-    for v in voices:
-        print(f"  {v.name:<45}  {v.id}")
-    engine.stop()
+    """Print available Windows SAPI voices via PowerShell."""
+    script = (
+        "$tts = New-Object -ComObject SAPI.SpVoice; "
+        "foreach ($v in $tts.GetVoices()) { Write-Host $v.GetDescription() }"
+    )
+    subprocess.run(["powershell", "-NoProfile", "-Command", script])
 
 
 def main() -> None:
-    # Auto-install pyttsx3 if missing
-    try:
-        import pyttsx3
-    except ImportError:
-        print("pyttsx3 not found. Installing...")
-        os.system(f'"{sys.executable}" -m pip install pyttsx3')
-
     parser = argparse.ArgumentParser(
-        description="Generate BlueLineDispatchPro dispatcher audio using Windows TTS (offline)"
+        description="Generate dispatcher audio using Windows SAPI (offline)"
     )
     parser.add_argument(
-        "--voice", type=str, default=None,
-        help="Partial voice name to search for (e.g. 'Zira', 'David'). Use --list-voices to see all."
+        "--voice", type=str, default="Zira",
+        help="Voice name fragment to search for (default: Zira). Use --list-voices to see all."
     )
     parser.add_argument(
         "--category", type=str, default=None,
@@ -342,7 +317,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--list-voices", action="store_true",
-        help="List all available Windows TTS voices and exit"
+        help="List available Windows TTS voices and exit"
     )
     args = parser.parse_args()
 
@@ -350,35 +325,41 @@ def main() -> None:
         list_voices()
         return
 
-    base_dir = Path(__file__).parent
-    audio_dir = base_dir / "audio"
-    categories = [args.category] if args.category else list(PHRASES.keys())
-    total_phrases = sum(len(PHRASES[c]) for c in categories if c in PHRASES)
+    base_dir   = Path(__file__).parent
+    audio_dir  = base_dir / "audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+
+    categories = (
+        {args.category: PHRASES[args.category]}
+        if args.category else PHRASES
+    )
+    total = sum(len(v) for v in categories.values())
 
     print(f"\n{'='*60}")
     print(f"  BlueLineDispatchPro — Dispatcher Audio Generator")
-    print(f"  Engine: Windows TTS (offline, no internet needed)")
-    print(f"{'='*60}")
-    engine = create_engine(args.voice)
-    print(f"  Output:     {audio_dir}")
-    print(f"  Categories: {', '.join(categories)}")
-    print(f"  Total:      {total_phrases} phrases")
+    print(f"  Engine: Windows SAPI (offline, no internet, no freeze)")
+    print(f"  Voice:  {args.voice}")
+    print(f"  Total:  {total} phrases → {audio_dir}")
     print(f"{'='*60}\n")
 
-    total_generated = 0
-    for cat in categories:
-        if cat not in PHRASES:
-            print(f"⚠  Unknown category: {cat}")
-            continue
-        print(f"\n📁  [{cat.upper()}]  ({len(PHRASES[cat])} phrases)")
-        n = generate_category(cat, PHRASES[cat], audio_dir, engine)
-        total_generated += n
-        print(f"  ✓ {n} files in audio/{cat}/")
+    script     = build_powershell_script(categories, audio_dir, args.voice)
+    ps1_path   = base_dir / "_bldp_generate.ps1"
 
-    engine.stop()
+    print("  Running PowerShell... (this window will show progress)\n")
+    ok = run_powershell_script(script, ps1_path)
+
+    # Count generated files
+    generated = sum(
+        1 for cat in categories
+        for f in (audio_dir / cat).glob("*.wav")
+        if f.stat().st_size > 512
+    )
+
     print(f"\n{'='*60}")
-    print(f"  ✅  Done! {total_generated} audio files generated.")
-    print(f"  📂  {audio_dir}")
+    if ok:
+        print(f"  Done! {generated} WAV files in {audio_dir}")
+    else:
+        print(f"  Finished with warnings. {generated} files present.")
     print(f"{'='*60}")
     print("\n  Run:  python dispatcher_main.py\n")
 
