@@ -22,21 +22,25 @@ echo  [OK] Compiler found: %CSC%
 :: ── Find GTA 5 install ───────────────────────────────────────────────────────
 set GTA_DIR=
 for %%D in (
+    "C:\Program Files\Rockstar Games\Grand Theft Auto V Legacy"
     "C:\Program Files\Rockstar Games\Grand Theft Auto V"
+    "C:\Program Files (x86)\Rockstar Games\Grand Theft Auto V Legacy"
     "C:\Program Files (x86)\Rockstar Games\Grand Theft Auto V"
     "C:\Games\Grand Theft Auto V"
     "D:\SteamLibrary\steamapps\common\Grand Theft Auto V"
     "C:\SteamLibrary\steamapps\common\Grand Theft Auto V"
 ) do (
-    if exist %%D\GTA5.exe set GTA_DIR=%%~D
+    if exist "%%~D\GTA5.exe" set GTA_DIR=%%~D
 )
 
 if "%GTA_DIR%"=="" (
     echo.
     echo  [!] Could not auto-detect GTA 5. Enter the full path to your GTA 5 folder:
-    echo      (the folder that contains GTA5.exe)
+    echo      (the folder that contains GTA5.exe, no quotes needed)
     echo.
     set /p GTA_DIR="  Path: "
+    :: Strip any quotes the user may have typed
+    set GTA_DIR=%GTA_DIR:"=%
 )
 
 if not exist "%GTA_DIR%\GTA5.exe" (
@@ -46,16 +50,19 @@ if not exist "%GTA_DIR%\GTA5.exe" (
 echo  [OK] GTA 5 found: %GTA_DIR%
 
 :: ── Check for required DLLs ──────────────────────────────────────────────────
-set RPH_DLL=%GTA_DIR%\RagePluginHook.dll
-set LSPDFR_DLL=%GTA_DIR%\plugins\LSPDFR\LSPD First Response.dll
-set PLUGIN_OUT=%GTA_DIR%\plugins\LSPDFR\BlueLinePlugin.dll
+set "RPH_DLL=%GTA_DIR%\RagePluginHook.dll"
+set "LSPDFR_DLL=%GTA_DIR%\plugins\LSPDFR\LSPD First Response.dll"
+set "PLUGIN_OUT=%GTA_DIR%\plugins\LSPDFR\BlueLinePlugin.dll"
 
+echo  [..] Checking: %RPH_DLL%
 if not exist "%RPH_DLL%" (
-    echo [ERROR] RagePluginHook.dll not found. Is LSPDFR installed?
+    echo [ERROR] RagePluginHook.dll not found at above path.
+    echo         Make sure LSPDFR is installed and you are on duty at least once.
     pause & exit /b 1
 )
+echo  [..] Checking: %LSPDFR_DLL%
 if not exist "%LSPDFR_DLL%" (
-    echo [ERROR] LSPD First Response.dll not found. Is LSPDFR installed?
+    echo [ERROR] LSPD First Response.dll not found at above path.
     pause & exit /b 1
 )
 echo  [OK] LSPDFR DLLs found.
