@@ -64,16 +64,17 @@ if "%RPH_DLL%"=="" (
     echo  [!] RagePluginHook.dll not found locally -- downloading SDK from NuGet...
     echo.
     powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-        "$pkg = 'https://www.nuget.org/api/v2/package/RagePluginHook/1.124.0';" ^
+        "$out = '%~dp0rph_sdk';" ^
         "$zip = '%~dp0rph_sdk.zip';" ^
-        "Invoke-WebRequest -Uri $pkg -OutFile $zip;" ^
-        "Expand-Archive -Path $zip -DestinationPath '%~dp0rph_sdk' -Force;" ^
-        "Copy-Item '%~dp0rph_sdk\SDK\RagePluginHook.dll' '%~dp0RagePluginHook.dll' -Force"
+        "Invoke-WebRequest -Uri 'https://www.nuget.org/api/v2/package/RagePluginHook/1.124.0' -OutFile $zip;" ^
+        "Expand-Archive -Path $zip -DestinationPath $out -Force;" ^
+        "$dll = Get-ChildItem -Path $out -Recurse -Filter 'RagePluginHook.dll' | Select-Object -First 1;" ^
+        "if ($dll) { Copy-Item $dll.FullName '%~dp0RagePluginHook.dll' -Force; Write-Host ('Found at: ' + $dll.FullName) } else { Write-Host 'DLL NOT FOUND IN PACKAGE'; Get-ChildItem -Path $out -Recurse | Select-Object FullName | Format-List }"
     if exist "%~dp0RagePluginHook.dll" (
         set RPH_DLL=%~dp0RagePluginHook.dll
         echo  [OK] SDK downloaded successfully.
     ) else (
-        echo [ERROR] Auto-download failed. Check your internet connection.
+        echo [ERROR] DLL not found in NuGet package. See file list above to find correct path.
         pause & exit /b 1
     )
 )
