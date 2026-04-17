@@ -49,22 +49,52 @@ if not exist "%GTA_DIR%\GTA5.exe" (
 )
 echo  [OK] GTA 5 found: %GTA_DIR%
 
-:: ── Check for required DLLs ──────────────────────────────────────────────────
-set "RPH_DLL=%GTA_DIR%\RagePluginHook.dll"
-set "LSPDFR_DLL=%GTA_DIR%\plugins\LSPDFR\LSPD First Response.dll"
-set "PLUGIN_OUT=%GTA_DIR%\plugins\LSPDFR\BlueLinePlugin.dll"
+:: ── Find RagePluginHook.dll (SDK file, not the .exe launcher) ────────────────
+set RPH_DLL=
+for %%F in (
+    "%GTA_DIR%\RagePluginHook.dll"
+    "%GTA_DIR%\RAGEPluginHook.dll"
+    "%GTA_DIR%\plugins\RagePluginHook.dll"
+    "%~dp0RagePluginHook.dll"
+) do (
+    if exist %%F set RPH_DLL=%%~F
+)
 
-echo  [..] Checking: %RPH_DLL%
-if not exist "%RPH_DLL%" (
-    echo [ERROR] RagePluginHook.dll not found at above path.
-    echo         Make sure LSPDFR is installed and you are on duty at least once.
+if "%RPH_DLL%"=="" (
+    echo.
+    echo  [!] RagePluginHook.dll ^(the SDK file^) was not found.
+    echo.
+    echo      This is NOT the same as RagePluginHook.exe.
+    echo      You need to download the SDK zip separately:
+    echo.
+    echo      1. Go to:  https://ragepluginhook.net/Downloads.aspx
+    echo      2. Download the latest SDK zip
+    echo      3. Extract RagePluginHook.dll from it
+    echo      4. Put it in the same folder as this bat file:
+    echo         %~dp0
+    echo      5. Run this script again.
+    echo.
     pause & exit /b 1
 )
-echo  [..] Checking: %LSPDFR_DLL%
-if not exist "%LSPDFR_DLL%" (
-    echo [ERROR] LSPD First Response.dll not found at above path.
+echo  [OK] RagePluginHook.dll: %RPH_DLL%
+
+:: ── Find LSPDFR DLL ───────────────────────────────────────────────────────────
+set LSPDFR_DLL=
+for %%F in (
+    "%GTA_DIR%\plugins\LSPDFR\LSPD First Response.dll"
+    "%~dp0LSPD First Response.dll"
+) do (
+    if exist %%F set LSPDFR_DLL=%%~F
+)
+
+if "%LSPDFR_DLL%"=="" (
+    echo [ERROR] LSPD First Response.dll not found.
+    echo         Expected: %GTA_DIR%\plugins\LSPDFR\LSPD First Response.dll
     pause & exit /b 1
 )
+echo  [OK] LSPDFR DLL: %LSPDFR_DLL%
+
+set "PLUGIN_OUT=%GTA_DIR%\plugins\LSPDFR\BlueLinePlugin.dll"
 echo  [OK] LSPDFR DLLs found.
 echo.
 echo  Compiling BlueLinePlugin.cs...
