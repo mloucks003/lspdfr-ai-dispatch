@@ -62,7 +62,7 @@ def main() -> None:
 
     # ── Wire dispatcher → UI ──────────────────────────────────────────────────
     def on_state(state_key: str, label: str, color: str) -> None:
-        ui.set_ai_state(label, color)
+        ui.set_ai_state(state_key, label, color)
 
     def on_user_speech(text: str) -> None:
         ui.append_transcript("officer", text)
