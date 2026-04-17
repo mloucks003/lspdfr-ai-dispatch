@@ -93,10 +93,47 @@ class AIDispatcher:
             callback=self._audio_callback,
         )
         self._stream.start()
-        # Single dedicated thread owns all audio consumption
+        self._calibrate_mic()
         threading.Thread(target=self._main_loop, daemon=True,
                          name="dispatcher").start()
         logger.info(f"AIDispatcher started — listening for '{self.callsign}'")
+
+    def _calibrate_mic(self):
+        """
+        Measure 2s of ambient noise and auto-set speech/silence thresholds.
+        Prints live levels so the user can see their mic is working.
+        """
+        print("\n🎙  Calibrating mic — stay quiet for 2 seconds...\n")
+        samples = []
+        for _ in range(int(2.0 * SAMPLE_RATE / CHUNK_FRAMES)):
+            try:
+                chunk = self._audio_q.get(timeout=1.0)
+                rms = int(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
+                samples.append(rms)
+            except queue.Empty:
+                pass
+
+        if not samples:
+            print("⚠  No audio detected during calibration — check your mic in Windows Sound Settings\n")
+            return
+
+        ambient  = int(np.mean(samples))
+        peak     = max(samples)
+        # Speech threshold = 4× ambient (well above background noise)
+        # Silence threshold = 2× ambient (hysteresis band)
+        auto_speech  = max(ambient * 4, 80)
+        auto_silence = max(ambient * 2, 50)
+
+        # Only override if config says to use defaults (i.e. user hasn't tuned manually)
+        if self.config.get("auto_calibrate", True):
+            self._speech_thresh  = auto_speech
+            self._silence_thresh = auto_silence
+
+        print(f"   Ambient RMS : {ambient}")
+        print(f"   Peak RMS    : {peak}")
+        print(f"   Speech thr  : {self._speech_thresh}")
+        print(f"   Silence thr : {self._silence_thresh}")
+        print(f"\n   ✅ Mic calibrated. Say your callsign to begin.\n")
 
     def stop(self):
         self._running = False
@@ -235,15 +272,17 @@ class AIDispatcher:
         Phase 2: record until SILENCE_END_CHUNKS of silence after speech.
         Returns int16 array, or None if session timed out.
         """
-        MIN_ONSET  = 2          # consecutive loud chunks needed to confirm speech
-        PRE_ROLL   = 4          # chunks to prepend before onset (avoids clipped starts)
+        MIN_ONSET    = 1        # chunks above threshold to confirm speech onset
+        PRE_ROLL     = 4        # pre-roll chunks to avoid clipped starts
+        LOG_EVERY    = 5        # print RMS every N chunks so user can see mic level
 
-        pre_buf       = []      # rolling window before speech starts
+        pre_buf       = []
         onset_count   = 0
         buffer        = []
         speech_heard  = False
         silent_chunks = 0
         timeout_count = 0
+        chunk_count   = 0
 
         while self._running:
             try:
@@ -254,16 +293,22 @@ class AIDispatcher:
                 continue
 
             rms = int(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
+            chunk_count += 1
 
             if not speech_heard:
                 pre_buf.append(chunk)
                 if len(pre_buf) > PRE_ROLL:
                     pre_buf.pop(0)
 
+                # Live RMS readout so user can tune threshold
+                if chunk_count % LOG_EVERY == 0:
+                    bar = "█" * min(int(rms / 50), 30)
+                    print(f"  [MIC] RMS: {rms:>5}  thresh: {self._speech_thresh}  |{bar}")
+
                 if rms >= self._speech_thresh:
                     onset_count += 1
                     if onset_count >= MIN_ONSET:
-                        # Confirmed speech — prepend pre-roll
+                        print(f"  [MIC] ✅ Speech detected at RMS {rms} — recording")
                         speech_heard = True
                         buffer = list(pre_buf)
                         self._set_state("listening")
@@ -271,7 +316,8 @@ class AIDispatcher:
                     onset_count = 0
                     timeout_count += 1
                     if timeout_count >= self._session_timeout_chunks:
-                        return None   # timed out — close session
+                        print("  [MIC] Session timed out — no speech detected")
+                        return None
             else:
                 buffer.append(chunk)
                 if rms >= self._silence_thresh:
@@ -279,6 +325,7 @@ class AIDispatcher:
                 else:
                     silent_chunks += 1
                     if silent_chunks >= self._silence_end_chunks:
+                        print(f"  [MIC] ✅ End of speech — sending to Whisper")
                         break
                 if len(buffer) >= self._max_record_chunks:
                     break
