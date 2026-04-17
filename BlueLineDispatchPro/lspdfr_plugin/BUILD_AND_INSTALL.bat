@@ -61,20 +61,21 @@ for %%F in (
 )
 
 if "%RPH_DLL%"=="" (
+    echo  [!] RagePluginHook.dll not found locally -- downloading SDK from NuGet...
     echo.
-    echo  [!] RagePluginHook.dll ^(the SDK file^) was not found.
-    echo.
-    echo      This is NOT the same as RagePluginHook.exe.
-    echo      You need to download the SDK zip separately:
-    echo.
-    echo      1. Go to:  https://ragepluginhook.net/Downloads.aspx
-    echo      2. Download the latest SDK zip
-    echo      3. Extract RagePluginHook.dll from it
-    echo      4. Put it in the same folder as this bat file:
-    echo         %~dp0
-    echo      5. Run this script again.
-    echo.
-    pause & exit /b 1
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+        "$pkg = 'https://www.nuget.org/api/v2/package/RagePluginHook/1.124.0';" ^
+        "$zip = '%~dp0rph_sdk.zip';" ^
+        "Invoke-WebRequest -Uri $pkg -OutFile $zip;" ^
+        "Expand-Archive -Path $zip -DestinationPath '%~dp0rph_sdk' -Force;" ^
+        "Copy-Item '%~dp0rph_sdk\SDK\RagePluginHook.dll' '%~dp0RagePluginHook.dll' -Force"
+    if exist "%~dp0RagePluginHook.dll" (
+        set RPH_DLL=%~dp0RagePluginHook.dll
+        echo  [OK] SDK downloaded successfully.
+    ) else (
+        echo [ERROR] Auto-download failed. Check your internet connection.
+        pause & exit /b 1
+    )
 )
 echo  [OK] RagePluginHook.dll: %RPH_DLL%
 
