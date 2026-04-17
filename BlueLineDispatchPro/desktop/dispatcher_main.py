@@ -32,8 +32,10 @@ def load_ai_config() -> dict:
         )
     with open(CONFIG_PATH, encoding="utf-8") as f:
         cfg = json.load(f)
-    missing = [k for k in ("openai_api_key", "elevenlabs_api_key")
-               if not cfg.get(k) or "PASTE" in cfg.get(k, "")]
+    provider = cfg.get("tts_provider", "fishaudio").lower()
+    tts_key  = "fishaudio_api_key" if provider == "fishaudio" else "elevenlabs_api_key"
+    missing  = [k for k in ("openai_api_key", tts_key)
+                if not cfg.get(k) or "PASTE" in cfg.get(k, "")]
     if missing:
         raise ValueError(
             f"Missing API keys in ai_config.json: {missing}\n"
