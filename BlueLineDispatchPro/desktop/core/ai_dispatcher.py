@@ -380,28 +380,53 @@ YOU ARE THE DISPATCHER. Never break character. Never acknowledge being an AI."""
     # ── TTS + Radio FX ────────────────────────────────────────────────────────
 
     def _speak(self, text: str):
-        """ElevenLabs TTS → radio FX → play (blocking)."""
-        vid       = self.config.get("elevenlabs_voice_id", "21m00Tcm4TlvDq8ikWAM")
-        api_key   = self.config["elevenlabs_api_key"]
+        """TTS → radio FX → play (blocking). Provider selected by config."""
         intensity = float(self.config.get("radio_intensity", 0.82))
+        provider  = self.config.get("tts_provider", "fishaudio").lower()
         try:
+            mp3_bytes = (self._tts_fishaudio(text) if provider == "fishaudio"
+                         else self._tts_elevenlabs(text))
+            if not mp3_bytes:
+                return
+            from pydub import AudioSegment
+            audio = (AudioSegment.from_mp3(io.BytesIO(mp3_bytes))
+                     .set_channels(1).set_frame_rate(SAMPLE_RATE).set_sample_width(2))
+            s = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
+            sd.play(self._radio_fx(s, intensity), samplerate=SAMPLE_RATE, blocking=True)
+        except Exception as e:
+            logger.error(f"Speak: {e}")
+
+    def _tts_fishaudio(self, text: str) -> bytes | None:
+        try:
+            from fishaudio import FishAudio
+            client = FishAudio(api_key=self.config["fishaudio_api_key"])
+            voice_id = self.config.get("fishaudio_voice_id") or None
+            return client.tts.convert(
+                text=text,
+                reference_id=voice_id,
+                latency="balanced",
+                format="mp3",
+            )
+        except Exception as e:
+            logger.error(f"Fish Audio TTS: {e}"); return None
+
+    def _tts_elevenlabs(self, text: str) -> bytes | None:
+        try:
+            vid = self.config.get("elevenlabs_voice_id", "21m00Tcm4TlvDq8ikWAM")
             resp = requests.post(
                 f"https://api.elevenlabs.io/v1/text-to-speech/{vid}",
-                headers={"xi-api-key": api_key, "Content-Type": "application/json"},
+                headers={"xi-api-key": self.config["elevenlabs_api_key"],
+                         "Content-Type": "application/json"},
                 json={"text": text, "model_id": "eleven_turbo_v2_5",
                       "voice_settings": {"stability": 0.50, "similarity_boost": 0.75,
                                          "style": 0.08, "use_speaker_boost": True}},
                 timeout=15,
             )
             if resp.status_code != 200:
-                logger.error(f"ElevenLabs {resp.status_code}: {resp.text[:200]}"); return
-            from pydub import AudioSegment
-            audio = (AudioSegment.from_mp3(io.BytesIO(resp.content))
-                     .set_channels(1).set_frame_rate(SAMPLE_RATE).set_sample_width(2))
-            s = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
-            sd.play(self._radio_fx(s, intensity), samplerate=SAMPLE_RATE, blocking=True)
+                logger.error(f"ElevenLabs {resp.status_code}: {resp.text[:200]}"); return None
+            return resp.content
         except Exception as e:
-            logger.error(f"Speak: {e}")
+            logger.error(f"ElevenLabs TTS: {e}"); return None
 
     def _radio_fx(self, samples: np.ndarray, intensity: float) -> np.ndarray:
         """Bandpass filter + soft clip distortion + static noise."""

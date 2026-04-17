@@ -13,6 +13,11 @@
   "openai_api_key":  "PASTE_YOUR_OPENAI_KEY_HERE",
   "gpt_model":       "gpt-4o-mini",
 
+  "tts_provider": "fishaudio",
+
+  "fishaudio_api_key":  "PASTE_YOUR_FISHAUDIO_KEY_HERE",
+  "fishaudio_voice_id": "PASTE_VOICE_REFERENCE_ID_HERE",
+
   "elevenlabs_api_key":  "PASTE_YOUR_ELEVENLABS_KEY_HERE",
   "elevenlabs_voice_id": "21m00Tcm4TlvDq8ikWAM",
 

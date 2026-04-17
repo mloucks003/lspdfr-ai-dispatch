@@ -30,8 +30,8 @@ keyboard==0.13.5
 pystray==0.19.5
 
 # ── Text-to-Speech (Audio Generation) ─────────────────────────────────────────
-pyttsx3==2.90
-edge-tts==6.1.12
+fish-audio-sdk
+openai
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 requests==2.32.3
