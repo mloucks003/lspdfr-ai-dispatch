@@ -213,8 +213,9 @@ class AIDispatcher:
                 self.on_dispatcher_speech(ack)
 
             while self._running:
-                # Pause + flush after speaking so mic doesn't catch playback
-                time.sleep(0.35)
+                # Wait for speaker audio to fully die out before listening.
+                # 0.8s covers most TTS playback tail + headphone reverb.
+                time.sleep(0.8)
                 self._flush_queue()
 
                 self._set_state("session_wait")
@@ -228,12 +229,17 @@ class AIDispatcher:
                 text = self._transcribe(audio)
                 logger.info(f"[{self.callsign}]: {text!r}")
 
-                if not text or len(text.strip()) < 3:
-                    reply = f"Say again {self.callsign}?"
-                    self._set_state("responding")
-                    if self.on_dispatcher_speech:
-                        self.on_dispatcher_speech(reply)
-                    self._speak(reply)
+                # Reject bleed/game audio — must be at least 4 words OR a known
+                # short command (code 4, negative, 10-4, etc.)
+                SHORT_COMMANDS = {
+                    "code 4", "code four", "10-4", "negative",
+                    "affirmative", "10-8", "copy", "go ahead",
+                    "stand by", "standby", "clear",
+                }
+                words = text.strip().split()
+                is_short_cmd = any(sc in text.lower() for sc in SHORT_COMMANDS)
+                if not text or (len(words) < 4 and not is_short_cmd):
+                    logger.info(f"Ignoring short/bleed capture: {text!r}")
                     continue
 
                 if self.on_user_speech:
