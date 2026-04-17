@@ -56,8 +56,9 @@ class AIDispatcher:
         self._session_timeout_chunks = int(
             SESSION_TIMEOUT * SAMPLE_RATE / CHUNK_FRAMES)
 
+        self._vosk_gate  = 40      # updated by _calibrate_mic at startup
         self._state      = "idle"
-        self._in_session = False   # True when channel is open
+        self._in_session = False
         self._running    = False
         self._stream     = None
         self._audio_q: queue.Queue = queue.Queue(maxsize=200)
@@ -119,21 +120,23 @@ class AIDispatcher:
 
         ambient  = int(np.mean(samples))
         peak     = max(samples)
-        # Speech threshold = 4× ambient (well above background noise)
-        # Silence threshold = 2× ambient (hysteresis band)
-        auto_speech  = max(ambient * 4, 80)
-        auto_silence = max(ambient * 2, 50)
+        # Speech threshold = 3× ambient (triggers recording mid-sentence)
+        # Silence threshold = 1.5× ambient (hysteresis band)
+        # Vosk gate = 1.5× ambient (filters game noise, passes normal voice)
+        auto_speech  = max(ambient * 3, 60)
+        auto_silence = max(int(ambient * 1.5), 40)
+        self._vosk_gate = max(int(ambient * 1.5), 40)
 
-        # Only override if config says to use defaults (i.e. user hasn't tuned manually)
         if self.config.get("auto_calibrate", True):
             self._speech_thresh  = auto_speech
             self._silence_thresh = auto_silence
 
         print(f"   Ambient RMS : {ambient}")
         print(f"   Peak RMS    : {peak}")
-        print(f"   Speech thr  : {self._speech_thresh}")
-        print(f"   Silence thr : {self._silence_thresh}")
-        print(f"\n   ✅ Mic calibrated. Say your callsign to begin.\n")
+        print(f"   Vosk gate   : {self._vosk_gate}  (callsign detection)")
+        print(f"   Speech thr  : {self._speech_thresh}  (recording trigger)")
+        print(f"   Silence thr : {self._silence_thresh}  (recording end)")
+        print(f"\n   ✅ Mic calibrated. Say your callsign at normal volume to begin.\n")
 
     def stop(self):
         self._running = False
@@ -188,12 +191,16 @@ class AIDispatcher:
                 logger.error(f"Main loop: {e}")
 
     def _vosk_feed(self, chunk: np.ndarray):
+        rms = int(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
+        # Energy gate — skip quiet chunks so game audio doesn't confuse Vosk.
+        # This means only actual speech reaches the recognizer.
+        if rms < self._vosk_gate:
+            return
         self._vosk_rec.AcceptWaveform(chunk.tobytes())
         partial = json.loads(self._vosk_rec.PartialResult()).get("partial", "")
         if partial and any(v in partial.lower() for v in self._variants):
             self._vosk_rec.Result()  # reset
             self._set_state("acknowledging")
-            # Hand off to session — runs in main_loop thread inline
             self._run_session()
 
     # ── Session — full conversation loop ──────────────────────────────────────
