@@ -10,6 +10,7 @@ Flow:
 import io
 import json
 import logging
+import os
 import queue
 import threading
 import time
@@ -73,6 +74,15 @@ class AIDispatcher:
         from openai import OpenAI
         self._openai   = OpenAI(api_key=config["openai_api_key"])
         self._vosk_rec = self._load_vosk()
+
+        # LSPDFR plate bridge (optional — only active when plugin is running)
+        from core.plate_checker import PlateChecker
+        bridge_path = config.get(
+            "lspdfr_bridge_path",
+            os.path.join(os.environ.get("LOCALAPPDATA", "C:/temp"), "BlueLineDispatch"),
+        )
+        self._plate_checker = PlateChecker(bridge_path,
+                                           timeout=config.get("plate_timeout", 6.0))
 
     # ── Vosk ──────────────────────────────────────────────────────────────────
 
@@ -418,17 +428,34 @@ COMMON RESPONSES:
 YOU ARE THE DISPATCHER. Never break character. Never acknowledge being an AI."""
 
     def _get_ai_response(self, user_text: str) -> str:
+        from core.plate_checker import is_plate_request, extract_plate
+
+        extra_context = ""
+
+        # ── Real LSPDFR plate lookup ──────────────────────────────────────────
+        if is_plate_request(user_text) and self._plate_checker.is_available():
+            plate = extract_plate(user_text)
+            if plate:
+                logger.info(f"[PLATE] Querying LSPDFR for: {plate}")
+                ack = f"10-4 {self.callsign}, running {plate}. Stand by."
+                self._speak(ack)
+                if self.on_dispatcher_speech:
+                    self.on_dispatcher_speech(ack)
+                data = self._plate_checker.query(plate)
+                extra_context = self._plate_checker.format_for_gpt(data, plate)
+
+        # ── Build messages ────────────────────────────────────────────────────
         self._conversation.append({"role": "user", "content": user_text})
-        history = self._conversation[-20:]
+        messages = [{"role": "system", "content": self._system_prompt()}]
+        if extra_context:
+            messages.append({"role": "system", "content": extra_context})
+        messages += self._conversation[-20:]
+
         try:
             resp = self._openai.chat.completions.create(
                 model=self.config.get("gpt_model", "gpt-4o-mini"),
-                messages=[
-                    {"role": "system", "content": self._system_prompt()},
-                    *history,
-                ],
-                max_tokens=250,
-                temperature=0.72,
+                messages=messages,
+                max_tokens=250, temperature=0.60,
             )
             ai_text = resp.choices[0].message.content.strip()
             self._conversation.append({"role": "assistant", "content": ai_text})
