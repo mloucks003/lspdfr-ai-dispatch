@@ -84,14 +84,25 @@ echo  [OK] RagePluginHook.dll: %RPH_DLL%
 set LSPDFR_DLL=
 for %%F in (
     "%GTA_DIR%\plugins\LSPDFR\LSPD First Response.dll"
+    "%GTA_DIR%\LSPD First Response.dll"
     "%~dp0LSPD First Response.dll"
 ) do (
-    if exist %%F set LSPDFR_DLL=%%~F
+    if exist "%%~F" set LSPDFR_DLL=%%~F
 )
 
 if "%LSPDFR_DLL%"=="" (
-    echo [ERROR] LSPD First Response.dll not found.
-    echo         Expected: %GTA_DIR%\plugins\LSPDFR\LSPD First Response.dll
+    echo  [!] LSPD First Response.dll not found in known paths -- searching GTA folder...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+        "$dll = Get-ChildItem -Path '%GTA_DIR%' -Recurse -Filter 'LSPD First Response.dll' -ErrorAction SilentlyContinue | Select-Object -First 1;" ^
+        "if ($dll) { $dll.FullName } else { 'NOTFOUND' }" > "%~dp0lspdfr_path.txt"
+    set /p LSPDFR_DLL=<"%~dp0lspdfr_path.txt"
+    del "%~dp0lspdfr_path.txt" >nul 2>&1
+)
+
+if "%LSPDFR_DLL%"=="NOTFOUND" set LSPDFR_DLL=
+if "%LSPDFR_DLL%"=="" (
+    echo [ERROR] LSPD First Response.dll not found anywhere in %GTA_DIR%
+    echo         Is LSPDFR installed? Download from lspdfr.com
     pause & exit /b 1
 )
 echo  [OK] LSPDFR DLL: %LSPDFR_DLL%
