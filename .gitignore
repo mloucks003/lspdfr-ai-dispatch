@@ -1,0 +1,27 @@
+# API keys — never commit these
+BlueLineDispatchPro/desktop/config/ai_config.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# PyInstaller
+*.spec
+dist/
+build/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
