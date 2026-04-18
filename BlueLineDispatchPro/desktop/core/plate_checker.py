@@ -19,12 +19,16 @@ import time
 logger = logging.getLogger(__name__)
 
 # ── Procedural data pools (seeded by plate for consistency) ───────────────────
-_FIRST = ["James","Michael","Robert","David","John","Maria","Jennifer","Linda",
-          "Patricia","Carlos","Miguel","Andre","Tyrone","Sarah","Kevin","Brian",
-          "Darnell","Marcus","Emily","Jessica","Ashley","Brittany","Heather"]
+_MALE_FIRST   = ["James","Michael","Robert","David","John","Carlos","Miguel",
+                 "Andre","Tyrone","Kevin","Brian","Darnell","Marcus","Antonio",
+                 "DeShawn","Trevor","Brandon","Tyler","Justin","Nathan","Eric"]
+_FEMALE_FIRST = ["Maria","Jennifer","Linda","Patricia","Sarah","Ashley",
+                 "Brittany","Heather","Jessica","Emily","Vanessa","Tanya",
+                 "Latoya","Nicole","Amanda","Crystal","Diana","Monique"]
 _LAST  = ["Smith","Johnson","Williams","Brown","Jones","Garcia","Miller","Davis",
           "Rodriguez","Martinez","Anderson","Taylor","Thomas","Jackson","White",
-          "Harris","Clark","Lewis","Robinson","Walker","Hall","Allen","Young"]
+          "Harris","Clark","Lewis","Robinson","Walker","Hall","Allen","Young",
+          "Hernandez","King","Scott","Green","Adams","Baker","Nelson","Carter"]
 _MONTHS = [1,2,3,4,5,6,7,8,9,10,11,12]
 
 # ── Phonetic alphabet decoder ─────────────────────────────────────────────────
@@ -138,29 +142,31 @@ class PlateChecker:
         return os.path.isdir(self.bridge_path)
 
     def _procedural_query(self, plate: str) -> dict:
-        """Generate consistent fake-but-realistic plate data seeded by plate."""
+        """Generate consistent plate data seeded by plate — same plate = same person always."""
         seed = int(hashlib.md5(plate.upper().encode()).hexdigest(), 16)
         rng  = random.Random(seed)
 
-        first  = rng.choice(_FIRST)
+        # Gender is fixed for this plate — 70% male, 30% female
+        is_male = rng.random() < 0.70
+        first  = rng.choice(_MALE_FIRST if is_male else _FEMALE_FIRST)
         last   = rng.choice(_LAST)
         month  = rng.choice(_MONTHS)
         day    = rng.randint(1, 28)
-        year   = rng.randint(1965, 2002)
-        wanted = rng.random() < 0.08          # 8% chance wanted
-        suspended = rng.random() < 0.07       # 7% chance suspended licence
-        expired   = rng.random() < 0.06       # 6% chance expired registration
+        year   = rng.randint(1960, 2000)
+        wanted    = rng.random() < 0.08   # 8% chance active warrant
+        suspended = rng.random() < 0.07   # 7% chance suspended license
+        expired   = rng.random() < 0.06   # 6% chance expired registration
 
         return {
-            "found":        True,
-            "plate":        plate.upper(),
-            "owner":        first + " " + last,
-            "dob":          "%02d/%02d/%d" % (month, day, year),
-            "wanted":       wanted,
+            "found":         True,
+            "plate":         plate.upper(),
+            "owner":         first + " " + last,
+            "dob":           "%02d/%02d/%d" % (month, day, year),
+            "wanted":        wanted,
             "license_valid": not suspended,
-            "registration": "Expired" if expired else "Valid",
-            "stolen":       False,
-            "source":       "procedural",
+            "registration":  "Expired" if expired else "Valid",
+            "stolen":        False,
+            "source":        "procedural",
         }
 
     def query(self, plate: str) -> dict:
