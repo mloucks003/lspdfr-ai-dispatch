@@ -106,6 +106,11 @@ echo  [OK] LSPDFR DLL: %LSPDFR_DLL%
 for %%F in ("%LSPDFR_DLL%") do set "PLUGIN_OUT=%%~dpFBlueLinePlugin.dll"
 echo  [OK] LSPDFR DLLs found.
 echo.
+echo  Inspecting RagePluginHook.dll for available types...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$a = [System.Reflection.Assembly]::LoadFrom('%RPH_DLL%');" ^
+    "$a.GetExportedTypes() | Select-Object -ExpandProperty FullName | Sort-Object"
+echo.
 echo  Compiling BlueLinePlugin.cs...
 echo.
 
