@@ -140,19 +140,16 @@ echo  [OK] LSPDFR DLL: %LSPDFR_DLL%
 for %%F in ("%LSPDFR_DLL%") do set "PLUGIN_OUT=%%~dpFBlueLinePlugin.dll"
 echo  [OK] LSPDFR DLLs found.
 echo.
-echo  Checking what assemblies LSPDFR references (to find real RPH SDK name)...
+echo  Checking for ScriptHookV.NET (SHVDN) installation...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "try {" ^
-    "  $a = [Reflection.Assembly]::ReflectionOnlyLoadFrom('%LSPDFR_DLL%');" ^
-    "  $refs = $a.GetReferencedAssemblies();" ^
-    "  $refs | ForEach-Object { Write-Host ('  REF: ' + $_.Name + ' v' + $_.Version) }" ^
-    "} catch { Write-Host ('  Error: ' + $_.Exception.Message) }"
-echo.
-echo  Searching GTA folder for all .NET assemblies with Rage in the name...
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "Get-ChildItem -Path '%GTA_DIR%' -Recurse -ErrorAction SilentlyContinue | " ^
-    "Where-Object { $_.Name -match 'rage' -and ($_.Extension -eq '.dll' -or $_.Extension -eq '.exe') } | " ^
-    "Select-Object -ExpandProperty FullName"
+    "$found = @();" ^
+    "foreach ($f in @('ScriptHookVDotNet3.dll','ScriptHookVDotNet2.dll','ScriptHookVDotNet.dll','ScriptHookV.dll')) {" ^
+    "  $p = Join-Path '%GTA_DIR%' $f;" ^
+    "  if (Test-Path $p) { $found += $p; Write-Host ('  [FOUND] ' + $p) }" ^
+    "  else { Write-Host ('  [NOT FOUND] ' + $f) }" ^
+    "};" ^
+    "if ($found.Count -gt 0) { Write-Host '  >> SHVDN is installed - can use for plate bridge!' }" ^
+    "else { Write-Host '  >> SHVDN not installed' }"
 echo.
 echo  Compiling BlueLinePlugin.cs...
 echo.
