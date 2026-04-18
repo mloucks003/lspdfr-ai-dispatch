@@ -5,11 +5,6 @@ using Rage;
 using LSPD_First_Response.Mod.API;
 using LSPD_First_Response.Engine.Scripting.Entities;
 
-[assembly: Rage.Attributes.Plugin("BlueLineDispatch",
-    Description = "BlueLineDispatchPro plate query bridge",
-    Author = "BlueLinePro",
-    PrefersSingleInstance = true)]
-
 public class Main : Rage.Plugin
 {
     private static readonly string SharedDir = Path.Combine(
