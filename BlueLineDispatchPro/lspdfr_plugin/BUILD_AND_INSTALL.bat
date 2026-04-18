@@ -59,6 +59,7 @@ set RPH_DLL=
 
 :: 1. Real SDK dll already placed here manually
 if exist "%~dp0RagePluginHookSDK.dll" set RPH_DLL=%~dp0RagePluginHookSDK.dll
+if exist "%~dp0RagePluginHook.dll"    set RPH_DLL=%~dp0RagePluginHook.dll
 
 :: 2. GTA SDK subfolder (standard RPH install)
 if "%RPH_DLL%"=="" if exist "%GTA_DIR%\SDK\RagePluginHookSDK.dll" (
