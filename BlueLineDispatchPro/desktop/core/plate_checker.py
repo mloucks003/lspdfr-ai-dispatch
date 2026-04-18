@@ -12,10 +12,20 @@ import hashlib
 import json
 import logging
 import os
+import random
 import re
 import time
 
 logger = logging.getLogger(__name__)
+
+# ── Procedural data pools (seeded by plate for consistency) ───────────────────
+_FIRST = ["James","Michael","Robert","David","John","Maria","Jennifer","Linda",
+          "Patricia","Carlos","Miguel","Andre","Tyrone","Sarah","Kevin","Brian",
+          "Darnell","Marcus","Emily","Jessica","Ashley","Brittany","Heather"]
+_LAST  = ["Smith","Johnson","Williams","Brown","Jones","Garcia","Miller","Davis",
+          "Rodriguez","Martinez","Anderson","Taylor","Thomas","Jackson","White",
+          "Harris","Clark","Lewis","Robinson","Walker","Hall","Allen","Young"]
+_MONTHS = [1,2,3,4,5,6,7,8,9,10,11,12]
 
 # ── Phonetic alphabet decoder ─────────────────────────────────────────────────
 PHONETIC = {
@@ -67,75 +77,114 @@ def extract_plate(text: str) -> str | None:
 
 
 class PlateChecker:
-    """File-bridge between Python dispatcher and the LSPDFR C# plugin."""
+    """
+    Plate lookup with two modes:
+    1. Real data  — file-bridge to in-game C# plugin (when running).
+    2. Procedural — seeded by plate string, consistent across lookups.
+    Always returns data; never blocks indefinitely.
+    """
 
     def __init__(self, bridge_path: str, timeout: float = 6.0):
-        self.bridge_path   = bridge_path
-        self.timeout       = timeout
-        self._query_file   = os.path.join(bridge_path, "plate_query.txt")
+        self.bridge_path    = bridge_path
+        self.timeout        = timeout
+        self._query_file    = os.path.join(bridge_path, "plate_query.txt")
         self._response_file = os.path.join(bridge_path, "plate_response.json")
 
     def is_available(self) -> bool:
-        """True if the bridge folder exists (plugin has created it)."""
+        """Always True — procedural fallback means we always have an answer."""
+        return True
+
+    def _plugin_running(self) -> bool:
+        """Check if the C# bridge folder was created by the in-game plugin."""
         return os.path.isdir(self.bridge_path)
 
-    def query(self, plate: str) -> dict | None:
+    def _procedural_query(self, plate: str) -> dict:
+        """Generate consistent fake-but-realistic plate data seeded by plate."""
+        seed = int(hashlib.md5(plate.upper().encode()).hexdigest(), 16)
+        rng  = random.Random(seed)
+
+        first  = rng.choice(_FIRST)
+        last   = rng.choice(_LAST)
+        month  = rng.choice(_MONTHS)
+        day    = rng.randint(1, 28)
+        year   = rng.randint(1965, 2002)
+        wanted = rng.random() < 0.08          # 8% chance wanted
+        suspended = rng.random() < 0.07       # 7% chance suspended licence
+        expired   = rng.random() < 0.06       # 6% chance expired registration
+
+        return {
+            "found":        True,
+            "plate":        plate.upper(),
+            "owner":        first + " " + last,
+            "dob":          "%02d/%02d/%d" % (month, day, year),
+            "wanted":       wanted,
+            "license_valid": not suspended,
+            "registration": "Expired" if expired else "Valid",
+            "stolen":       False,
+            "source":       "procedural",
+        }
+
+    def query(self, plate: str) -> dict:
         """
-        Send plate to LSPDFR plugin and wait for the real result.
-        Returns a dict with vehicle/owner data, or None on timeout.
+        Try the C# plugin bridge first; fall back to procedural if not running.
         """
-        try:
-            os.makedirs(self.bridge_path, exist_ok=True)
-            # Clear stale response
-            if os.path.exists(self._response_file):
-                os.remove(self._response_file)
-            # Write the query
-            with open(self._query_file, "w") as f:
-                f.write(plate.strip().upper())
-            logger.info(f"[PLATE] Query sent: {plate}")
-            # Wait for plugin to respond
-            start = time.time()
-            while time.time() - start < self.timeout:
+        plate = plate.strip().upper()
+
+        # ── Try real plugin bridge ────────────────────────────────────────────
+        if os.path.isdir(self.bridge_path):
+            try:
                 if os.path.exists(self._response_file):
-                    with open(self._response_file, "r") as f:
-                        data = json.load(f)
-                    logger.info(f"[PLATE] Response: {data}")
-                    return data
-                time.sleep(0.2)
-            logger.warning(f"[PLATE] Timeout waiting for response on {plate}")
-            return None
-        except Exception as e:
-            logger.error(f"[PLATE] Bridge error: {e}")
-            return None
+                    os.remove(self._response_file)
+                with open(self._query_file, "w") as f:
+                    f.write(plate)
+                logger.info("[PLATE] Query sent to plugin: " + plate)
+                start = time.time()
+                while time.time() - start < self.timeout:
+                    if os.path.exists(self._response_file):
+                        with open(self._response_file, "r") as f:
+                            data = json.load(f)
+                        logger.info("[PLATE] Plugin response: " + str(data))
+                        return data
+                    time.sleep(0.2)
+                logger.warning("[PLATE] Plugin timeout — using procedural")
+            except Exception as e:
+                logger.error("[PLATE] Bridge error: " + str(e))
+
+        # ── Procedural fallback ───────────────────────────────────────────────
+        data = self._procedural_query(plate)
+        logger.info("[PLATE] Procedural result for " + plate + ": " + str(data))
+        return data
 
     def format_for_gpt(self, data: dict, plate: str) -> str:
-        """
-        Convert raw LSPDFR plate data into a GPT context injection string.
-        GPT will use this to generate a realistic radio response.
-        """
+        """Convert plate data into a GPT context string for radio response."""
         if not data or not data.get("found"):
             return (
-                f"REAL PLATE DATA: Plate {plate} — no vehicle found in the area with that plate. "
-                f"Tell the officer the plate comes back with no record locally, "
-                f"advise them to verify."
+                "PLATE DATA: Plate " + plate + " — no record on file. "
+                "Tell the officer the plate comes back no record, advise to verify."
             )
+
         flags = []
         if data.get("stolen"):
-            flags.append("VEHICLE REPORTED STOLEN")
+            flags.append("VEHICLE REPORTED STOLEN — advise officer, use caution")
         if data.get("wanted"):
-            flags.append(f"OWNER {data.get('owner','UNKNOWN')} HAS ACTIVE WARRANT")
+            flags.append("OWNER HAS ACTIVE WARRANT — advise officer")
         if not data.get("license_valid", True):
-            flags.append("OWNER LICENSE SUSPENDED OR REVOKED")
+            flags.append("DRIVER LICENSE SUSPENDED OR REVOKED")
+        if data.get("registration") == "Expired":
+            flags.append("REGISTRATION EXPIRED")
         if not flags:
-            flags.append("No wants or warrants")
+            flags.append("No wants or warrants, valid registration")
+
+        # Include vehicle description only if we have real data from the plugin
+        vehicle_line = ""
+        if data.get("source") != "procedural" and data.get("model"):
+            vehicle_line = "\nVehicle: " + data.get("color","") + " " + data.get("model","")
 
         return (
-            f"REAL PLATE DATA from LSPDFR (use this exactly, do not invent data):\n"
-            f"Plate: {data.get('plate', plate)}\n"
-            f"Vehicle: {data.get('color','Unknown')} {data.get('model','Unknown')}\n"
-            f"Owner: {data.get('owner','Unknown')}\n"
-            f"DOB: {data.get('dob','Unknown')}\n"
-            f"Registration: {data.get('registration','Valid')}\n"
-            f"Flags: {', '.join(flags)}\n"
-            f"Generate a professional dispatcher radio response using ONLY the above data."
+            "PLATE DATA (read this back professionally over radio, do not add info):\n"
+            "Plate: " + data.get("plate", plate) + vehicle_line + "\n"
+            "Owner: " + data.get("owner", "Unknown") + "\n"
+            "DOB: " + data.get("dob", "Unknown") + "\n"
+            "Registration: " + data.get("registration", "Valid") + "\n"
+            "Status: " + ", ".join(flags)
         )
