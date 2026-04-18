@@ -58,20 +58,32 @@ if exist "%~dp0rph_sdk\lib\net472\RagePluginHook.dll" (
 )
 
 if "%RPH_DLL%"=="" (
-    echo  [!] RagePluginHook.dll not found -- downloading SDK from NuGet...
+    echo  [!] Searching entire GTA folder for RagePluginHook.dll...
     powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-        "$zip = '%~dp0rph_sdk.zip';" ^
-        "Invoke-WebRequest -Uri 'https://www.nuget.org/api/v2/package/RagePluginHook/1.124.0' -OutFile $zip;" ^
-        "Expand-Archive -Path $zip -DestinationPath '%~dp0rph_sdk' -Force;" ^
-        "$dll = Get-ChildItem -Path '%~dp0rph_sdk' -Recurse -Filter 'RagePluginHook.dll' | Select-Object -First 1;" ^
-        "if ($dll) { Copy-Item $dll.FullName '%~dp0RagePluginHook.dll' -Force }"
-    if exist "%~dp0RagePluginHook.dll" (
-        set RPH_DLL=%~dp0RagePluginHook.dll
-        echo  [OK] SDK downloaded.
-    ) else (
-        echo [ERROR] Could not download RagePluginHook SDK. Check internet connection.
-        pause & exit /b 1
-    )
+        "$dll = Get-ChildItem -Path '%GTA_DIR%' -Recurse -Filter 'RagePluginHook.dll' -ErrorAction SilentlyContinue | Select-Object -First 1;" ^
+        "if ($dll) { $dll.FullName } else { 'NOTFOUND' }" > "%~dp0rph_path.txt"
+    set /p RPH_DLL=<"%~dp0rph_path.txt"
+    del "%~dp0rph_path.txt" >nul 2>&1
+    if "%RPH_DLL%"=="NOTFOUND" set RPH_DLL=
+)
+
+if "%RPH_DLL%"=="" (
+    echo.
+    echo  [!] RagePluginHook.dll ^(SDK^) not found anywhere.
+    echo.
+    echo      The NuGet version is incomplete. You need the real SDK dll.
+    echo      Easiest way to get it:
+    echo.
+    echo      1. Open the LSPDFR Discord: https://discord.gg/lspdfr
+    echo      2. Ask in #modding-support for RagePluginHook.dll SDK file
+    echo         ^(or search the pinned resources channel^)
+    echo      3. Drop it here: %~dp0RagePluginHook.dll
+    echo      4. Run this script again.
+    echo.
+    echo      OR: Check if any other LSPDFR plugins you have installed
+    echo      came with a RagePluginHook.dll in their zip - use that.
+    echo.
+    pause & exit /b 1
 )
 echo  [OK] RPH SDK: %RPH_DLL%
 
@@ -105,11 +117,6 @@ echo  [OK] LSPDFR DLL: %LSPDFR_DLL%
 :: Install next to LSPD First Response.dll, wherever it was found
 for %%F in ("%LSPDFR_DLL%") do set "PLUGIN_OUT=%%~dpFBlueLinePlugin.dll"
 echo  [OK] LSPDFR DLLs found.
-echo.
-echo  Inspecting RagePluginHook.dll for available types...
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$a = [System.Reflection.Assembly]::LoadFrom('%RPH_DLL%');" ^
-    "$a.GetExportedTypes() | Select-Object -ExpandProperty FullName | Sort-Object"
 echo.
 echo  Compiling BlueLinePlugin.cs...
 echo.
