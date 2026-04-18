@@ -83,6 +83,8 @@ class AIDispatcher:
         )
         self._plate_checker = PlateChecker(bridge_path,
                                            timeout=config.get("plate_timeout", 6.0))
+        # Cache last plate result so ID checks return the same person
+        self._last_plate_data: dict = {}
 
     # ── Vosk ──────────────────────────────────────────────────────────────────
 
@@ -401,19 +403,10 @@ RESPONSE LENGTH:
 10-38 (traffic stop), 10-33 (emergency/officer needs help), 10-78 (need assistance), \
 10-22 (disregard), 10-20 (location), 10-29 (check for wants/warrants).
 
-PLATE AND NAME RUNS — CRITICAL RULE:
-NEVER output brackets, placeholders, or template text like [PLATE], [YEAR], [COLOR].
-ALWAYS generate completely fictional but realistic data.
-
-When {cs} gives you a plate or name to run, respond like this real example:
-"10-4 {cs}, running Adam-Charlie-7. Stand by... Adam-Charlie-7 comes back to a \
-2017 silver Toyota Camry, registered to Marcus T. Webb of 4421 Innocence Boulevard, \
-Los Santos. Registration valid, insurance valid. No wants or warrants. \
-Anything further, {cs}?"
-
-Randomize results: 75% clean, 15% minor issue (expired reg or lapsed insurance), \
-10% warrant on file or vehicle reported stolen. Generate real-sounding names, \
-addresses, years, colors, makes, models every time.
+PLATE AND ID RUNS:
+When plate or ID data is provided in a system message, read ONLY that data back.
+Do NOT invent names, vehicles, or statuses. Use EXACTLY what is in the data block.
+If no data block is present for a plate/ID run, say "Stand by, checking that now."
 
 COMMON RESPONSES:
 - Traffic stop: "Copy {cs}, showing you 10-38 at [location they gave or 'your location']."
@@ -428,21 +421,42 @@ COMMON RESPONSES:
 YOU ARE THE DISPATCHER. Never break character. Never acknowledge being an AI."""
 
     def _get_ai_response(self, user_text: str) -> str:
-        from core.plate_checker import is_plate_request, extract_plate
+        from core.plate_checker import is_plate_request, is_id_request, extract_plate
 
         extra_context = ""
 
-        # ── Real LSPDFR plate lookup ──────────────────────────────────────────
-        if is_plate_request(user_text) and self._plate_checker.is_available():
+        # ── Plate lookup ──────────────────────────────────────────────────────
+        if is_plate_request(user_text):
             plate = extract_plate(user_text)
             if plate:
-                logger.info(f"[PLATE] Querying LSPDFR for: {plate}")
+                logger.info(f"[PLATE] Running: {plate}")
                 ack = f"10-4 {self.callsign}, running {plate}. Stand by."
                 self._speak(ack)
                 if self.on_dispatcher_speech:
                     self.on_dispatcher_speech(ack)
                 data = self._plate_checker.query(plate)
+                self._last_plate_data = data   # cache for follow-up ID check
                 extra_context = self._plate_checker.format_for_gpt(data, plate)
+
+        # ── Driver ID / 28 check — return the same person as the plate ────────
+        elif is_id_request(user_text) and self._last_plate_data:
+            data = self._last_plate_data
+            owner = data.get("owner", "Unknown")
+            dob   = data.get("dob", "Unknown")
+            lic   = "valid" if data.get("license_valid", True) else "SUSPENDED"
+            wanted = "ACTIVE WARRANT ON FILE" if data.get("wanted") else "no wants or warrants"
+            logger.info(f"[ID] Returning cached owner: {owner}")
+            ack = f"10-4 {self.callsign}, running the subject. Stand by."
+            self._speak(ack)
+            if self.on_dispatcher_speech:
+                self.on_dispatcher_speech(ack)
+            extra_context = (
+                "ID CHECK DATA (read this back, do not add or change anything):\n"
+                "Subject: " + owner + "\n"
+                "DOB: " + dob + "\n"
+                "Driver license: " + lic + "\n"
+                "Status: " + wanted
+            )
 
         # ── Build messages ────────────────────────────────────────────────────
         self._conversation.append({"role": "user", "content": user_text})

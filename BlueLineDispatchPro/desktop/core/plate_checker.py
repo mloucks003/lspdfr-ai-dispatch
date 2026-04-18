@@ -55,10 +55,24 @@ _PLATE_TRIGGERS = [
     "run this plate", "plate run", "check for wants",
 ]
 
+# Phrases that indicate the user wants a person / driver ID check
+_ID_TRIGGERS = [
+    "run his id", "run her id", "run their id", "run the driver",
+    "run a 28", "run 28", "28 on the driver", "28 on him", "28 on her",
+    "check his id", "check her id", "run his information",
+    "run her information", "run the subject", "id on the driver",
+    "run that subject", "run the occupant",
+]
+
 
 def is_plate_request(text: str) -> bool:
     t = text.lower()
     return any(trigger in t for trigger in _PLATE_TRIGGERS)
+
+
+def is_id_request(text: str) -> bool:
+    t = text.lower()
+    return any(trigger in t for trigger in _ID_TRIGGERS)
 
 
 def extract_plate(text: str) -> str | None:
