@@ -47,7 +47,7 @@ public class BlueLinePlugin : Script
         foreach (Vehicle v in World.GetAllVehicles())
         {
             if (!v.Exists()) continue;
-            string vp = (v.LicensePlate != null ? v.LicensePlate : "")
+            string vp = (v.Mods.LicensePlate != null ? v.Mods.LicensePlate : "")
                         .Replace(" ", "").Replace("-", "").ToUpper();
             if (vp == clean || vp.Contains(clean) || clean.Contains(vp))
             { found = v; break; }
@@ -58,7 +58,7 @@ public class BlueLinePlugin : Script
 
         // ── Real vehicle data (SHVDN) ─────────────────────────────────────────
         string model = GetModelName(found);
-        string color = GetColorName(found.PrimaryColor);
+        string color = GetColorName(found.Mods.PrimaryColor);
 
         // ── Real LSPDFR persona (reflection) ─────────────────────────────────
         string owner = ""; string dob = "";

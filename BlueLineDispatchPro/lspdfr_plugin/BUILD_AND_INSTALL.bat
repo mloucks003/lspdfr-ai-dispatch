@@ -73,9 +73,23 @@ if "%SHVDN_DLL%"=="" (
 )
 echo  [OK] SHVDN3: %SHVDN_DLL%
 
+:: Cache SHVDN3.dll next to the script so the compiler can always reach it
+:: (avoids "access denied" reading directly from Program Files)
+if not "%SHVDN_DLL%"=="%~dp0ScriptHookVDotNet3.dll" (
+    copy /Y "%SHVDN_DLL%" "%~dp0ScriptHookVDotNet3.dll" >nul 2>&1
+)
+set SHVDN_DLL=%~dp0ScriptHookVDotNet3.dll
+
 :: Output folder: GTA\scripts\  (SHVDN loads scripts from here)
 set SCRIPTS_DIR=%GTA_DIR%\scripts
-if not exist "%SCRIPTS_DIR%" mkdir "%SCRIPTS_DIR%"
+if not exist "%SCRIPTS_DIR%" (
+    mkdir "%SCRIPTS_DIR%" 2>nul
+    if errorlevel 1 (
+        echo  [!] Could not create scripts folder -- make sure you RIGHT-CLICKED
+        echo      and chose "Run as Administrator".
+        pause & exit /b 1
+    )
+)
 set PLUGIN_OUT=%SCRIPTS_DIR%\BlueLinePlugin.dll
 
 echo.
