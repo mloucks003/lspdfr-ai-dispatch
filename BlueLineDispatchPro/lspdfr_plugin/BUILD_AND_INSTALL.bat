@@ -51,10 +51,6 @@ echo  [OK] GTA 5 found: %GTA_DIR%
 
 :: ── Find RagePluginHook SDK assembly ─────────────────────────────────────────
 :: Priority: RagePluginHookSDK.dll (real SDK) > NuGet SDK folder > broad scan
-:: The old RagePluginHook.dll stub is deleted so it doesn't block the real search
-if exist "%~dp0RagePluginHook.dll" (
-    del "%~dp0RagePluginHook.dll" >nul 2>&1
-)
 set RPH_DLL=
 
 :: 1. Real SDK dll already placed here manually
