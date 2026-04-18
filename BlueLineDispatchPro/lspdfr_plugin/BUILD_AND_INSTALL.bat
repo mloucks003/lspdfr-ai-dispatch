@@ -140,6 +140,24 @@ echo  [OK] LSPDFR DLL: %LSPDFR_DLL%
 for %%F in ("%LSPDFR_DLL%") do set "PLUGIN_OUT=%%~dpFBlueLinePlugin.dll"
 echo  [OK] LSPDFR DLLs found.
 echo.
+echo  Inspecting LSPDFR to find the correct RPH plugin base class...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "try {" ^
+    "  $a = [Reflection.Assembly]::ReflectionOnlyLoadFrom('%LSPDFR_DLL%');" ^
+    "  $types = $a.GetTypes() | Where-Object { $_.BaseType -ne $null -and $_.BaseType.FullName -match 'Rage' };" ^
+    "  if ($types) { $types | ForEach-Object { Write-Host ('  Type: ' + $_.FullName + ' extends ' + $_.BaseType.FullName) } }" ^
+    "  else { Write-Host '  No Rage-derived types found in LSPDFR dll' }" ^
+    "} catch { Write-Host ('  Error: ' + $_.Exception.Message) }"
+echo.
+echo  Inspecting RPH dll for all types in Rage namespace...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "try {" ^
+    "  $a = [Reflection.Assembly]::ReflectionOnlyLoadFrom('%RPH_DLL%');" ^
+    "  $types = $a.GetTypes() | Where-Object { $_.Namespace -eq 'Rage' } | Select-Object -ExpandProperty Name | Sort-Object;" ^
+    "  if ($types) { $types | ForEach-Object { Write-Host ('  Rage.' + $_) } }" ^
+    "  else { Write-Host '  No types found in Rage namespace' }" ^
+    "} catch { Write-Host ('  Error: ' + $_.Exception.Message) }"
+echo.
 echo  Compiling BlueLinePlugin.cs...
 echo.
 
