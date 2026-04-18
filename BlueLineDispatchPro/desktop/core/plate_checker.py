@@ -172,6 +172,9 @@ class PlateChecker:
     def query(self, plate: str) -> dict:
         """
         Try the C# plugin bridge first; fall back to procedural if not running.
+        When the bridge returns source='shvdn' it has real vehicle data but
+        the LSPDFR persona reflection didn't fire, so we merge in a procedural
+        persona seeded by the plate so the owner stays consistent.
         """
         plate = plate.strip().upper()
 
@@ -189,6 +192,15 @@ class PlateChecker:
                         with open(self._response_file, "r") as f:
                             data = json.load(f)
                         logger.info("[PLATE] Plugin response: " + str(data))
+                        # Real vehicle data but no LSPDFR persona — merge procedural
+                        if data.get("source") == "shvdn" and not data.get("owner"):
+                            proc = self._procedural_query(plate)
+                            data["owner"]         = proc["owner"]
+                            data["dob"]           = proc["dob"]
+                            data["wanted"]        = proc["wanted"]
+                            data["license_valid"] = proc["license_valid"]
+                            data["registration"]  = proc["registration"]
+                            data["source"]        = "shvdn+procedural"
                         return data
                     time.sleep(0.2)
                 logger.warning("[PLATE] Plugin timeout — using procedural")
@@ -220,9 +232,10 @@ class PlateChecker:
         if not flags:
             flags.append("No wants or warrants, valid registration")
 
-        # Include vehicle description only if we have real data from the plugin
+        # Include vehicle description when bridge gave us real game data
         vehicle_line = ""
-        if data.get("source") != "procedural" and data.get("model"):
+        src = data.get("source", "procedural")
+        if src in ("lspdfr", "shvdn", "shvdn+procedural") and data.get("model"):
             vehicle_line = "\nVehicle: " + data.get("color","") + " " + data.get("model","")
 
         return (
