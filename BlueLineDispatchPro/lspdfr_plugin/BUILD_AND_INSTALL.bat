@@ -50,38 +50,40 @@ if not exist "%GTA_DIR%\GTA5.exe" (
 echo  [OK] GTA 5 found: %GTA_DIR%
 
 :: ── Find RagePluginHook SDK assembly ─────────────────────────────────────────
-:: The real SDK file is RagePluginHookSDK.dll inside a "SDK" subfolder of GTA V
+:: Priority: RagePluginHookSDK.dll (real SDK) > NuGet SDK folder > broad scan
+:: The old RagePluginHook.dll stub is deleted so it doesn't block the real search
+if exist "%~dp0RagePluginHook.dll" (
+    del "%~dp0RagePluginHook.dll" >nul 2>&1
+)
 set RPH_DLL=
 
-:: Check local plugin folder first (previously copied)
-if exist "%~dp0RagePluginHookSDK.dll"     set RPH_DLL=%~dp0RagePluginHookSDK.dll
-if exist "%~dp0RagePluginHook.dll"        set RPH_DLL=%~dp0RagePluginHook.dll
+:: 1. Real SDK dll already placed here manually
+if exist "%~dp0RagePluginHookSDK.dll" set RPH_DLL=%~dp0RagePluginHookSDK.dll
 
-:: Check GTA SDK subfolder (standard RPH install location)
-if "%RPH_DLL%"=="" (
-    if exist "%GTA_DIR%\SDK\RagePluginHookSDK.dll" set RPH_DLL=%GTA_DIR%\SDK\RagePluginHookSDK.dll
+:: 2. GTA SDK subfolder (standard RPH install)
+if "%RPH_DLL%"=="" if exist "%GTA_DIR%\SDK\RagePluginHookSDK.dll" (
+    set RPH_DLL=%GTA_DIR%\SDK\RagePluginHookSDK.dll
 )
-if "%RPH_DLL%"=="" (
-    if exist "%GTA_DIR%\SDK\RagePluginHook.dll"    set RPH_DLL=%GTA_DIR%\SDK\RagePluginHook.dll
+if "%RPH_DLL%"=="" if exist "%GTA_DIR%\SDK\RagePluginHook.dll" (
+    set RPH_DLL=%GTA_DIR%\SDK\RagePluginHook.dll
 )
 
-:: Check NuGet package SDK folder
-if "%RPH_DLL%"=="" (
+:: 3. Inside the already-downloaded NuGet package - list ALL dlls for debugging
+if "%RPH_DLL%"=="" if exist "%~dp0rph_sdk" (
+    echo  [..] Files in NuGet package:
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+        "Get-ChildItem -Path '%~dp0rph_sdk' -Recurse -Filter '*.dll' | Select-Object -ExpandProperty FullName"
+    echo.
+    :: Check SDK subfolder specifically
     if exist "%~dp0rph_sdk\SDK\RagePluginHookSDK.dll" (
         copy /Y "%~dp0rph_sdk\SDK\RagePluginHookSDK.dll" "%~dp0RagePluginHookSDK.dll" >nul
         set RPH_DLL=%~dp0RagePluginHookSDK.dll
     )
 )
-if "%RPH_DLL%"=="" (
-    if exist "%~dp0rph_sdk\lib\net472\RagePluginHook.dll" (
-        copy /Y "%~dp0rph_sdk\lib\net472\RagePluginHook.dll" "%~dp0RagePluginHook.dll" >nul
-        set RPH_DLL=%~dp0RagePluginHook.dll
-    )
-)
 
-:: Broad search: scan entire GTA folder for SDK dll (any name)
+:: 4. Broad scan of entire GTA folder for any Rage*.dll
 if "%RPH_DLL%"=="" (
-    echo  [!] Scanning GTA folder for RPH SDK...
+    echo  [!] Scanning GTA folder...
     powershell -NoProfile -ExecutionPolicy Bypass -Command ^
         "$hits = Get-ChildItem -Path '%GTA_DIR%' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'RagePluginHook' -and $_.Extension -eq '.dll' };" ^
         "if ($hits) { $hits[0].FullName } else { 'NOTFOUND' }" > "%~dp0rph_path.txt"
@@ -90,30 +92,21 @@ if "%RPH_DLL%"=="" (
     if "%RPH_DLL%"=="NOTFOUND" set RPH_DLL=
 )
 
-:: Download from NuGet (full package, check SDK folder inside it)
-if "%RPH_DLL%"=="" (
-    echo  [!] Downloading RPH SDK from NuGet...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-        "$zip='%~dp0rph_sdk.zip';" ^
-        "Invoke-WebRequest -Uri 'https://www.nuget.org/api/v2/package/RagePluginHook/1.124.0' -OutFile $zip;" ^
-        "Expand-Archive -Path $zip -DestinationPath '%~dp0rph_sdk' -Force;" ^
-        "$dll = Get-ChildItem -Path '%~dp0rph_sdk' -Recurse -Filter '*.dll' | Where-Object { $_.Name -match 'RagePluginHook' } | Select-Object -First 1;" ^
-        "if ($dll) { Write-Host ('Found: ' + $dll.FullName); Copy-Item $dll.FullName '%~dp0RagePluginHook.dll' -Force }"
-    if exist "%~dp0RagePluginHook.dll" set RPH_DLL=%~dp0RagePluginHook.dll
-)
-
 if "%RPH_DLL%"=="" (
     echo.
-    echo  [!] RPH SDK not found. Manual step needed:
+    echo  ============================================================
+    echo   SDK NOT FOUND -- one manual step required
+    echo  ============================================================
     echo.
-    echo      Look in your GTA V folder for a subfolder called "SDK"
-    echo      Inside it should be RagePluginHookSDK.dll
-    echo      Copy it to: %~dp0RagePluginHookSDK.dll
-    echo      Then run this script again.
+    echo   The RagePluginHook SDK dll is not on this PC.
     echo.
-    echo      If no SDK folder exists, re-download LSPDFR from:
-    echo      https://www.lcpdfr.com/downloads/gta5mods/g17media/7792-lspd-first-response/
-    echo      The zip contains the SDK folder.
+    echo   QUICKEST FIX:
+    echo   1. Go to: https://www.lcpdfr.com/downloads/gta5mods/g17media/7792-lspd-first-response/
+    echo   2. Download the LSPDFR zip
+    echo   3. Open it -- look for RagePluginHookSDK.dll or any Rage*.dll
+    echo   4. Copy it here:
+    echo      %~dp0RagePluginHookSDK.dll
+    echo   5. Run this script again.
     echo.
     pause & exit /b 1
 )
