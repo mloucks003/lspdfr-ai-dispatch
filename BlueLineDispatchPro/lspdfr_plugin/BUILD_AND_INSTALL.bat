@@ -140,23 +140,19 @@ echo  [OK] LSPDFR DLL: %LSPDFR_DLL%
 for %%F in ("%LSPDFR_DLL%") do set "PLUGIN_OUT=%%~dpFBlueLinePlugin.dll"
 echo  [OK] LSPDFR DLLs found.
 echo.
-echo  Inspecting LSPDFR to find the correct RPH plugin base class...
+echo  Checking what assemblies LSPDFR references (to find real RPH SDK name)...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "try {" ^
     "  $a = [Reflection.Assembly]::ReflectionOnlyLoadFrom('%LSPDFR_DLL%');" ^
-    "  $types = $a.GetTypes() | Where-Object { $_.BaseType -ne $null -and $_.BaseType.FullName -match 'Rage' };" ^
-    "  if ($types) { $types | ForEach-Object { Write-Host ('  Type: ' + $_.FullName + ' extends ' + $_.BaseType.FullName) } }" ^
-    "  else { Write-Host '  No Rage-derived types found in LSPDFR dll' }" ^
+    "  $refs = $a.GetReferencedAssemblies();" ^
+    "  $refs | ForEach-Object { Write-Host ('  REF: ' + $_.Name + ' v' + $_.Version) }" ^
     "} catch { Write-Host ('  Error: ' + $_.Exception.Message) }"
 echo.
-echo  Inspecting RPH dll for all types in Rage namespace...
+echo  Searching GTA folder for all .NET assemblies with Rage in the name...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "try {" ^
-    "  $a = [Reflection.Assembly]::ReflectionOnlyLoadFrom('%RPH_DLL%');" ^
-    "  $types = $a.GetTypes() | Where-Object { $_.Namespace -eq 'Rage' } | Select-Object -ExpandProperty Name | Sort-Object;" ^
-    "  if ($types) { $types | ForEach-Object { Write-Host ('  Rage.' + $_) } }" ^
-    "  else { Write-Host '  No types found in Rage namespace' }" ^
-    "} catch { Write-Host ('  Error: ' + $_.Exception.Message) }"
+    "Get-ChildItem -Path '%GTA_DIR%' -Recurse -ErrorAction SilentlyContinue | " ^
+    "Where-Object { $_.Name -match 'rage' -and ($_.Extension -eq '.dll' -or $_.Extension -eq '.exe') } | " ^
+    "Select-Object -ExpandProperty FullName"
 echo.
 echo  Compiling BlueLinePlugin.cs...
 echo.

@@ -1,10 +1,14 @@
 """
 BlueLineDispatchPro — LSPDFR Plate Checker Bridge
 
-Writes a plate query to a shared folder that the in-game C# plugin watches.
-The plugin looks up the plate via LSPDFR API and writes the real result back.
-Python reads the result and passes it to GPT for formatting.
+Primary:  Writes a plate query to a shared folder that the in-game C# plugin
+          watches. The plugin looks up the plate via LSPDFR API and writes the
+          real result back.
+Fallback: If the plugin is not running, generates realistic procedural data
+          seeded by the plate string so the same plate always returns the same
+          owner / vehicle / flags.
 """
+import hashlib
 import json
 import logging
 import os
