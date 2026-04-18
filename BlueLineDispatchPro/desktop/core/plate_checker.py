@@ -78,16 +78,41 @@ def is_id_request(text: str) -> bool:
 def extract_plate(text: str) -> str | None:
     """
     Extract a license plate from a radio transmission.
-    Handles direct plates ("645TAR") and phonetic ("6-4-5 Tango-Alpha-Romeo").
+    Handles:
+      - Direct plates:       "64AZG074"
+      - Phonetic words:      "6-4 Alpha Zulu Golf 0-7-4"
+      - Spelled out chars:   "6 4 A Z G 0 7 4"  (each char space-separated)
     """
     t = text.lower()
-    # Decode phonetic alphabet (longest first to avoid partial matches)
+
+    # 1. Decode phonetic alphabet (longest word first to avoid partial matches)
     for word, char in sorted(PHONETIC.items(), key=lambda x: -len(x[0])):
         t = re.sub(rf'\b{re.escape(word)}\b', char, t)
-    # Find plate-shaped strings (3–8 alphanumeric chars)
-    candidates = re.findall(r'[A-Z0-9]{3,8}', t.upper())
+
+    # 2. Join sequences of individual space-separated alphanumeric chars
+    #    e.g. "6 4 a z g 0 7 4" → "64azg074"
+    #    Repeat until stable so long chains collapse fully
+    for _ in range(10):
+        new_t = re.sub(r'\b([a-z0-9]) ([a-z0-9])\b', r'\1\2', t)
+        if new_t == t:
+            break
+        t = new_t
+
+    upper = t.upper()
+    candidates = re.findall(r'[A-Z0-9]{3,8}', upper)
     candidates = [c for c in candidates if c not in _STOPWORDS]
-    return candidates[0] if candidates else None
+
+    if not candidates:
+        return None
+
+    # 3. Prefer candidates that look like actual plates:
+    #    contain BOTH letters and digits (e.g. "64AZG074" beats "GOT")
+    mixed = [c for c in candidates if re.search(r'[A-Z]', c) and re.search(r'[0-9]', c)]
+    if mixed:
+        return max(mixed, key=len)
+
+    # 4. Fall back to longest remaining candidate
+    return max(candidates, key=len)
 
 
 class PlateChecker:
@@ -195,10 +220,12 @@ class PlateChecker:
             vehicle_line = "\nVehicle: " + data.get("color","") + " " + data.get("model","")
 
         return (
-            "PLATE DATA (read this back professionally over radio, do not add info):\n"
+            "PLATE RESULT — check is COMPLETE, do NOT say 'stand by' again.\n"
+            "Read back ALL of the following over radio like a real dispatcher:\n"
             "Plate: " + data.get("plate", plate) + vehicle_line + "\n"
-            "Owner: " + data.get("owner", "Unknown") + "\n"
+            "Registered to: " + data.get("owner", "Unknown") + "\n"
             "DOB: " + data.get("dob", "Unknown") + "\n"
             "Registration: " + data.get("registration", "Valid") + "\n"
-            "Status: " + ", ".join(flags)
+            "Status: " + ", ".join(flags) + "\n"
+            "End with 'Anything further, [callsign]?'"
         )
