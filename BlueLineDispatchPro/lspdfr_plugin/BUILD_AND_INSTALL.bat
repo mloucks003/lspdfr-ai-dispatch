@@ -49,21 +49,31 @@ if not exist "%GTA_DIR%\GTA5.exe" (
 )
 echo  [OK] GTA 5 found: %GTA_DIR%
 
-:: ── Find RAGEPluginHook.exe (referenced directly as assembly) ────────────────
+:: ── Find RagePluginHook.dll (the SDK reference assembly, NOT the .exe) ───────
 set RPH_DLL=
-for %%F in (
-    "%GTA_DIR%\RAGEPluginHook.exe"
-    "%GTA_DIR%\RagePluginHook.exe"
-) do (
-    if exist "%%~F" set RPH_DLL=%%~F
+if exist "%~dp0RagePluginHook.dll"         set RPH_DLL=%~dp0RagePluginHook.dll
+if exist "%~dp0rph_sdk\lib\net472\RagePluginHook.dll" (
+    copy /Y "%~dp0rph_sdk\lib\net472\RagePluginHook.dll" "%~dp0RagePluginHook.dll" >nul
+    set RPH_DLL=%~dp0RagePluginHook.dll
 )
 
 if "%RPH_DLL%"=="" (
-    echo [ERROR] RAGEPluginHook.exe not found in %GTA_DIR%
-    echo         Make sure RagePluginHook is installed in your GTA 5 folder.
-    pause & exit /b 1
+    echo  [!] RagePluginHook.dll not found -- downloading SDK from NuGet...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+        "$zip = '%~dp0rph_sdk.zip';" ^
+        "Invoke-WebRequest -Uri 'https://www.nuget.org/api/v2/package/RagePluginHook/1.124.0' -OutFile $zip;" ^
+        "Expand-Archive -Path $zip -DestinationPath '%~dp0rph_sdk' -Force;" ^
+        "$dll = Get-ChildItem -Path '%~dp0rph_sdk' -Recurse -Filter 'RagePluginHook.dll' | Select-Object -First 1;" ^
+        "if ($dll) { Copy-Item $dll.FullName '%~dp0RagePluginHook.dll' -Force }"
+    if exist "%~dp0RagePluginHook.dll" (
+        set RPH_DLL=%~dp0RagePluginHook.dll
+        echo  [OK] SDK downloaded.
+    ) else (
+        echo [ERROR] Could not download RagePluginHook SDK. Check internet connection.
+        pause & exit /b 1
+    )
 )
-echo  [OK] RPH reference: %RPH_DLL%
+echo  [OK] RPH SDK: %RPH_DLL%
 
 :: ── Find LSPDFR DLL ───────────────────────────────────────────────────────────
 set LSPDFR_DLL=
