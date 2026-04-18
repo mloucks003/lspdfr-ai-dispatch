@@ -158,11 +158,14 @@ echo  Compiling BlueLinePlugin.cs...
 echo.
 
 :: ── Compile ──────────────────────────────────────────────────────────────────
+:: Reference both RagePluginHook.dll (type forwarder) and RAGEPluginHook.exe
+:: (actual implementation) so the compiler can resolve Rage.Plugin
 "%CSC%" ^
     /target:library ^
     /optimize+ ^
     /out:"%~dp0BlueLinePlugin.dll" ^
     /reference:"%RPH_DLL%" ^
+    /reference:"%GTA_DIR%\RAGEPluginHook.exe" ^
     /reference:"%LSPDFR_DLL%" ^
     /reference:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\System.dll" ^
     /reference:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\System.Drawing.dll" ^
