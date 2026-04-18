@@ -49,36 +49,21 @@ if not exist "%GTA_DIR%\GTA5.exe" (
 )
 echo  [OK] GTA 5 found: %GTA_DIR%
 
-:: ── Find RagePluginHook.dll (SDK file, not the .exe launcher) ────────────────
+:: ── Find RAGEPluginHook.exe (referenced directly as assembly) ────────────────
 set RPH_DLL=
 for %%F in (
-    "%GTA_DIR%\RagePluginHook.dll"
-    "%GTA_DIR%\RAGEPluginHook.dll"
-    "%GTA_DIR%\plugins\RagePluginHook.dll"
-    "%~dp0RagePluginHook.dll"
+    "%GTA_DIR%\RAGEPluginHook.exe"
+    "%GTA_DIR%\RagePluginHook.exe"
 ) do (
-    if exist %%F set RPH_DLL=%%~F
+    if exist "%%~F" set RPH_DLL=%%~F
 )
 
 if "%RPH_DLL%"=="" (
-    echo  [!] RagePluginHook.dll not found locally -- downloading SDK from NuGet...
-    echo.
-    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-        "$out = '%~dp0rph_sdk';" ^
-        "$zip = '%~dp0rph_sdk.zip';" ^
-        "Invoke-WebRequest -Uri 'https://www.nuget.org/api/v2/package/RagePluginHook/1.124.0' -OutFile $zip;" ^
-        "Expand-Archive -Path $zip -DestinationPath $out -Force;" ^
-        "$dll = Get-ChildItem -Path $out -Recurse -Filter 'RagePluginHook.dll' | Select-Object -First 1;" ^
-        "if ($dll) { Copy-Item $dll.FullName '%~dp0RagePluginHook.dll' -Force; Write-Host ('Found at: ' + $dll.FullName) } else { Write-Host 'DLL NOT FOUND IN PACKAGE'; Get-ChildItem -Path $out -Recurse | Select-Object FullName | Format-List }"
-    if exist "%~dp0RagePluginHook.dll" (
-        set RPH_DLL=%~dp0RagePluginHook.dll
-        echo  [OK] SDK downloaded successfully.
-    ) else (
-        echo [ERROR] DLL not found in NuGet package. See file list above to find correct path.
-        pause & exit /b 1
-    )
+    echo [ERROR] RAGEPluginHook.exe not found in %GTA_DIR%
+    echo         Make sure RagePluginHook is installed in your GTA 5 folder.
+    pause & exit /b 1
 )
-echo  [OK] RagePluginHook.dll: %RPH_DLL%
+echo  [OK] RPH reference: %RPH_DLL%
 
 :: ── Find LSPDFR DLL ───────────────────────────────────────────────────────────
 set LSPDFR_DLL=
@@ -107,7 +92,8 @@ if "%LSPDFR_DLL%"=="" (
 )
 echo  [OK] LSPDFR DLL: %LSPDFR_DLL%
 
-set "PLUGIN_OUT=%GTA_DIR%\plugins\LSPDFR\BlueLinePlugin.dll"
+:: Install next to LSPD First Response.dll, wherever it was found
+for %%F in ("%LSPDFR_DLL%") do set "PLUGIN_OUT=%%~dpFBlueLinePlugin.dll"
 echo  [OK] LSPDFR DLLs found.
 echo.
 echo  Compiling BlueLinePlugin.cs...
