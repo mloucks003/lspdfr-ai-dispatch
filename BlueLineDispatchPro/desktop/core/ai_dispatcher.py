@@ -713,12 +713,23 @@ class AIDispatcher:
                 ref_id = self.config.get("fishaudio_voice_id") or None
             else:
                 ref_id = voice_id   # could be None (platform default) or a real ID
-            return client.tts.convert(
-                text=text,
-                reference_id=ref_id,
-                latency="normal",
-                format="mp3",
-            )
+
+            # Try with latency="normal" (best quality on newer SDK versions).
+            # Fall back to the bare call if the installed SDK doesn't accept it.
+            try:
+                return client.tts.convert(
+                    text=text,
+                    reference_id=ref_id,
+                    latency="normal",
+                    format="mp3",
+                )
+            except TypeError:
+                logger.debug("Fish Audio SDK: latency param not supported — retrying without it")
+                return client.tts.convert(
+                    text=text,
+                    reference_id=ref_id,
+                    format="mp3",
+                )
         except Exception as e:
             logger.error(f"Fish Audio TTS: {e}"); return None
 
