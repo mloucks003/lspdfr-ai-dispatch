@@ -17,11 +17,11 @@ import time
 import wave
 
 from core.world_state import world_state, UnitStatus
+from core.audio_fx   import generate_ptt_open, generate_ptt_close, radio_fx as _audio_radio_fx
 
 import numpy as np
 import requests
 import sounddevice as sd
-from scipy import signal as sp
 
 logger = logging.getLogger(__name__)
 
@@ -606,49 +606,16 @@ YOU ARE THE DISPATCHER ONLY. Never break character. Never acknowledge being AI."
 
     # ── TTS + Radio FX ────────────────────────────────────────────────────────
 
-    def _radio_click(self, release: bool = False):
-        """
-        Generate and play a realistic PTT click.
-        key-up  (release=False): sharper, brighter — sounds like button press
-        key-down (release=True): slightly lower, slower decay — button release
-        """
-        try:
-            dur  = 0.11 if not release else 0.09
-            t    = np.linspace(0, dur, int(dur * SAMPLE_RATE), endpoint=False)
-            nyq  = SAMPLE_RATE / 2
-
-            # Main click body — bandpass filtered noise burst
-            noise = np.random.normal(0, 0.5, len(t)).astype(np.float32)
-            lo = 380 / nyq;  hi = 3400 / nyq
-            b, a = sp.butter(4, [lo, hi], btype="band")
-            noise = sp.lfilter(b, a, noise).astype(np.float32)
-
-            # Envelope: instant attack, exponential decay
-            decay = 45 if not release else 28
-            env   = np.exp(-t * decay).astype(np.float32)
-            click = noise * env
-
-            # Dispatch console has a slight low-mid character (~520 Hz)
-            tone = np.sin(2 * np.pi * 520 * t).astype(np.float32) * env * 0.30
-            click = np.clip((click + tone) * 0.72, -0.85, 0.85).astype(np.float32)
-
-            sd.play(click, samplerate=SAMPLE_RATE, blocking=True)
-        except Exception:
-            pass
-
-    def _squelch_click(self):
-        """Dispatch key-up click (called before speech)."""
-        self._radio_click(release=False)
-
-    def _squelch_release(self):
-        """Dispatch key-down click (called after speech ends)."""
-        self._radio_click(release=True)
-
     # Sentinel — passed to _tts_fishaudio by _speak() so it uses the configured dispatch voice
     _DISPATCH_VOICE_SENTINEL = "__dispatch__"
 
     def _speak(self, text: str):
-        """Dispatch voice (ALLE). Suppresses mic for full duration to prevent mic bleed."""
+        """
+        Dispatch voice (ALLE).
+        PTT open click + voice + tail tone are concatenated into ONE numpy
+        buffer so playback is gapless and all audio goes through the same
+        radio FX chain.  Mic is suppressed for the full duration.
+        """
         intensity = float(self.config.get("radio_intensity", 0.82))
         self._mic_suppressed.set()
         try:
@@ -658,11 +625,13 @@ YOU ARE THE DISPATCHER ONLY. Never break character. Never acknowledge being AI."
             from pydub import AudioSegment
             audio = (AudioSegment.from_mp3(io.BytesIO(mp3_bytes))
                      .set_channels(1).set_frame_rate(SAMPLE_RATE).set_sample_width(2))
-            s  = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
-            fx = self._radio_fx(s, intensity)
-            self._squelch_click()
+            s = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
+
+            gap   = np.zeros(int(0.018 * SAMPLE_RATE), dtype=np.float32)
+            full  = np.concatenate([generate_ptt_open(SAMPLE_RATE), gap, s, gap,
+                                    generate_ptt_close(SAMPLE_RATE)])
+            fx    = self._radio_fx(full, intensity)
             sd.play(fx, samplerate=SAMPLE_RATE, blocking=True)
-            self._squelch_release()
         except Exception as e:
             logger.error(f"Speak: {e}")
         finally:
@@ -720,40 +689,8 @@ YOU ARE THE DISPATCHER ONLY. Never break character. Never acknowledge being AI."
             logger.error(f"ElevenLabs TTS: {e}"); return None
 
     def _radio_fx(self, samples: np.ndarray, intensity: float = 0.82) -> np.ndarray:
-        """
-        Police radio audio chain — clean, realistic processing.
-
-        Real police radio sounds like a filtered telephone with light compression
-        and subtle hiss. NOT heavily distorted or saturated.
-
-          1. Bandpass  — 300-3200 Hz telephone voice band, 4th-order Butterworth.
-                         4th-order has gentler rolloff than 6th — far less ringing
-                         on already-compressed MP3 audio.
-          2. Normalize — bring level to consistent headroom.
-          3. Soft clip — very gentle tanh (drive 1.3), barely audible warmth.
-          4. Noise     — subtle hiss floor (radio character, not static).
-        """
-        if intensity <= 0:
-            return samples
-        s   = samples.astype(np.float64)
-        nyq = SAMPLE_RATE / 2
-
-        # 1. Bandpass — 4th-order, telephone voice band
-        b, a = sp.butter(4, [300 / nyq, 3200 / nyq], btype="band")
-        s    = sp.lfilter(b, a, s)
-
-        # 2. Normalize to consistent level
-        peak = np.max(np.abs(s)) + 1e-9
-        s    = s / peak * 0.80
-
-        # 3. Very gentle soft limiter — just takes the edge off peaks
-        drive = 1.3
-        s     = np.tanh(s * drive) / np.tanh(np.array([drive]))[0] * 0.80
-
-        # 4. Subtle noise floor — radio hiss, not static
-        s += np.random.normal(0, 0.003 * intensity, len(s))
-
-        return np.clip(s, -1.0, 1.0).astype(np.float32)
+        """Delegate to the shared audio_fx chain so dispatch and officers sound identical."""
+        return _audio_radio_fx(samples, intensity, SAMPLE_RATE)
 
     # ── State ─────────────────────────────────────────────────────────────────
 

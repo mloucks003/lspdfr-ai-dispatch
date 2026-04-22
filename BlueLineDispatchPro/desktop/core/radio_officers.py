@@ -23,6 +23,7 @@ from typing import Callable, Optional
 import numpy as np
 
 from core.world_state import world_state, UnitStatus
+from core.audio_fx   import generate_ptt_open, generate_ptt_close, radio_fx as _audio_radio_fx
 
 logger = logging.getLogger(__name__)
 
@@ -160,13 +161,7 @@ def _callsign_aliases(callsign: str) -> list[str]:
     return list(aliases)
 
 
-# Distinct squelch-click frequencies per unit (Hz).
-# Listeners learn to recognise each officer by their key-up tone.
-_OFFICER_SQUELCH_HZ = {
-    "Sam-41":    680,
-    "Lincoln-9": 820,
-    "King-3":    960,
-}
+
 
 _DISPATCH_ACKS = {
     "traffic_stop":  [
@@ -212,13 +207,13 @@ class RadioOfficerManager:
     def __init__(
         self,
         config: dict,
-        tts_fn:     Callable[[str, Optional[str]], Optional[bytes]],
-        radio_fx_fn: Callable,
+        tts_fn: Callable[[str, Optional[str]], Optional[bytes]],
         openai_client,
+        radio_fx_fn: Callable = None,   # kept for backward compat; ignored — uses audio_fx.py
     ):
         self._config    = config
         self._tts       = tts_fn
-        self._radio_fx  = radio_fx_fn
+        self._radio_fx  = _audio_radio_fx  # always use the shared chain
         self._openai    = openai_client
         self._running   = False
         self._paused    = False
@@ -574,45 +569,14 @@ RULES:
 
     # ── TTS playback ──────────────────────────────────────────────────────────
 
-    def _make_officer_click(self, callsign: str, release: bool = False) -> np.ndarray:
-        """
-        Build a PTT click for a specific officer.
-        Each callsign has a unique tone frequency mixed into bandpass noise
-        so listeners can immediately identify who is transmitting.
-        release=True → softer, slower-decay key-down version.
-        """
-        from scipy import signal as sp_sig
-        freq = _OFFICER_SQUELCH_HZ.get(callsign, 750)
-        dur  = 0.10 if not release else 0.08
-        t    = np.linspace(0, dur, int(dur * self.SAMPLE_RATE), endpoint=False)
-        nyq  = self.SAMPLE_RATE / 2
-
-        # Bandpass noise body
-        noise = np.random.normal(0, 0.45, len(t)).astype(np.float32)
-        b, a  = sp_sig.butter(4, [380 / nyq, 3400 / nyq], btype="band")
-        noise = sp_sig.lfilter(b, a, noise).astype(np.float32)
-
-        # Officer ID tone + envelope
-        decay = 42 if not release else 26
-        env   = np.exp(-t * decay).astype(np.float32)
-        tone  = np.sin(2 * np.pi * freq * t).astype(np.float32) * env * 0.45
-        click = (noise * env + tone) * 0.70
-        return np.clip(click, -0.85, 0.85).astype(np.float32)
-
-    def _officer_squelch(self, callsign: str, release: bool = False):
-        """Play a PTT click for the given officer (key-up or key-down)."""
-        import sounddevice as sd
-        try:
-            click = self._make_officer_click(callsign, release=release)
-            sd.play(click, samplerate=self.SAMPLE_RATE, blocking=True)
-        except Exception:
-            pass
-
     def _speak_as_officer(self, officer: dict, text: str):
-        """Play officer TTS through radio FX at correct sample rate — no pitch shift, no speed tricks."""
+        """
+        Play officer TTS through radio FX.
+        PTT open + voice + tail tone concatenated into ONE buffer so playback
+        is gapless and all audio goes through the same radio FX chain.
+        """
         import io
         import sounddevice as sd
-        cs = officer["callsign"]
         if self.mic_suppressed is not None:
             self.mic_suppressed.set()
         try:
@@ -624,12 +588,12 @@ RULES:
                      .set_channels(1)
                      .set_frame_rate(self.SAMPLE_RATE)
                      .set_sample_width(2))
-            s  = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
-            fx = self._radio_fx(s, float(self._config.get("radio_intensity", 0.82)))
-
-            self._officer_squelch(cs, release=False)          # key-up click
+            s     = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
+            gap   = np.zeros(int(0.018 * self.SAMPLE_RATE), dtype=np.float32)
+            full  = np.concatenate([generate_ptt_open(self.SAMPLE_RATE), gap,
+                                    s, gap, generate_ptt_close(self.SAMPLE_RATE)])
+            fx    = self._radio_fx(full, float(self._config.get("radio_intensity", 0.82)))
             sd.play(fx, samplerate=self.SAMPLE_RATE, blocking=True)
-            self._officer_squelch(cs, release=True)           # key-down click
         except Exception as e:
             logger.error(f"Officer speak: {e}")
         finally:
