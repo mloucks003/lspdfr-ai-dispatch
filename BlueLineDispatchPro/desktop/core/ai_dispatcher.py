@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import queue
+import re
 import threading
 import time
 import wave
@@ -263,6 +264,56 @@ class AIDispatcher:
         "code 3", "respond to", "another unit",
     ]
 
+    # ── Transmission filter ───────────────────────────────────────────────────
+
+    # Single words that are clearly mic bleed, not real radio traffic.
+    _BLEED_WORDS = frozenset({
+        "bye", "thanks", "okay", "yeah", "hello", "uh", "um", "oh",
+        "hey", "alright", "right", "yep", "nope", "sure",
+    })
+    # Keywords that mean "process this even if it's short"
+    _RADIO_KEYWORDS = frozenset({
+        "what", "where", "when", "who", "how", "need", "show", "go",
+        "en route", "backup", "copy", "roger", "negative", "affirmative",
+        "code", "status", "location", "update", "respond", "request",
+    })
+
+    def _should_process(self, text: str) -> bool:
+        """
+        True  → send to GPT.
+        False → discard as bleed or single-word noise.
+
+        Rules (first match wins):
+          • Empty → False
+          • Single word that is a bleed word → False
+          • Contains a callsign → True  (officer addressing)
+          • Contains a 10-code or any digit → True  ("what's your 10-20?")
+          • Contains a radio keyword or question word → True
+          • 3+ words → True  (real transmission by length alone)
+          • Default → False
+        """
+        if not text:
+            return False
+        words = text.strip().split()
+        tl    = text.lower()
+
+        # Single filler word
+        if len(words) == 1 and words[0].lower() in self._BLEED_WORDS:
+            return False
+        # Named callsign in text
+        if self._officers.detect_named_officer(text):
+            return True
+        # 10-code or any digit
+        if re.search(r'\b10-\d+\b|\d', tl):
+            return True
+        # Radio/question keyword
+        if any(kw in tl for kw in self._RADIO_KEYWORDS):
+            return True
+        # 3+ words is long enough to be a real transmission
+        if len(words) >= 3:
+            return True
+        return False
+
     # Words that mean the player is explicitly addressing dispatch.
     # Checked BEFORE officer name matching so "Sam-44 county to King-3" → dispatch.
     _DISPATCH_ADDRESS = [
@@ -324,13 +375,8 @@ class AIDispatcher:
                 text = self._transcribe(audio)
                 logger.info(f"[{self.callsign}]: {text!r}")
 
-                # Reject bleed/short noise
-                SHORT_COMMANDS = {
-                    "code 4", "code four", "10-4", "negative", "affirmative",
-                    "10-8", "copy", "go ahead", "stand by", "standby", "clear",
-                }
-                words = text.strip().split()
-                if not text or (len(words) < 4 and not any(sc in text.lower() for sc in SHORT_COMMANDS)):
+                # Reject bleed/noise — use the smart filter
+                if not self._should_process(text):
                     logger.info(f"Ignoring short/bleed: {text!r}")
                     continue
 
@@ -492,59 +538,37 @@ class AIDispatcher:
     # ── AI response ───────────────────────────────────────────────────────────
 
     def _system_prompt(self) -> str:
-        cs      = self.callsign
-        roster  = world_state.roster_for_prompt()
-        return f"""You are a police radio dispatcher for {self.agency}. \
-You are talking to officer {cs} over the radio channel.
-
-LIVE UNIT STATUS — you track all of these in real time:
-{roster}
-Use this to assign backup from available units, reference unit locations, and give realistic ETAs. \
-Never say a unit is unavailable if the roster shows them 10-8.
-
-VOICE AND TONE:
-You are an LSPD radio dispatcher — professional, calm, zero emotion, zero filler.
-No "stay safe", no "of course", no "absolutely". Pure radio cadence.
-Speak exactly how LAPD or NYPD dispatch sounds on a real scanner recording.
-
-RESPONSE LENGTH:
-Match what a real dispatcher actually says — not artificially short, not wordy.
-- Simple ack: 5-10 words. "10-4 {cs}, copy your 10-38."
-- Operational response: 20-35 words. Include cross streets, ETAs, unit assignments.
-- Plate/ID return: Full read-back with owner name, DOB, status, wants.
-- Emergency: Full broadcast. All units, location, nature, responding units, EMS.
-
-RESPONSE STYLE — MATCH THESE EXACTLY:
-Traffic stop copy:
-  "Copy {cs}, showing you 10-38 on the [vehicle description] at [location], cross street [street]. I show you code 6 at this time."
-Backup request:
-  "[Unit], respond to {cs}'s 10-20 at [location]. Code 2. {cs}, backup is en route from [area], ETA approximately 2 minutes."
-On scene:
-  "Copy {cs}, showing you 10-23 at [address]. Keep me advised. [Unit] is available in your area if needed."
-Pursuit:
-  "Copy {cs}, broadcasting pursuit. All units, vehicle pursuit active [direction] on [street]. Air support notified. Spike strips authorized at [location]."
-Shots fired:
-  "All units, shots fired at {cs}'s location — [address]. EMS code 3. Sergeant is en route. [Unit], respond to assist."
-10-33 / officer needs help:
-  "ALL UNITS, 10-33 at {cs}'s location, [address]. [Unit] and [unit], respond code 3. EMS is being dispatched."
-Plate return: Use ONLY the data provided in the system message. Read it all back.
-Code 4 / clear: "Copy {cs}, code 4. Show you 10-8 and available."
-Can't understand: "Say again {cs}, you're broken."
-Off-topic / not police-related: respond only "10-4." — nothing more.
-If {cs} asks to speak with another unit: say "{cs}, go ahead and reach out to [unit] directly on channel."
-Never say another officer is "unavailable" or "not on this channel" — all listed units are on this channel.
-
-10-CODES (use naturally):
-10-4 copy, 10-8 available, 10-20 location, 10-23 on scene, 10-29 wants/warrants,
-10-33 emergency, 10-38 traffic stop, 10-76 en route, 10-78 need assistance,
-10-99 officer down, code 2 urgent no lights/sirens, code 3 lights and sirens.
-
-PLATE AND ID RUNS:
-When plate/ID data is provided in a system message, read ALL of it back clearly.
-Owner name spelled out. DOB. Vehicle. Wants and warrants status. License status.
-Never invent data. If no system message data, say "Stand by, running that now."
-
-YOU ARE THE DISPATCHER ONLY. Never break character. Never acknowledge being AI."""
+        cs     = self.callsign
+        roster = world_state.roster_for_prompt()
+        return (
+            f"You are the radio dispatcher for {self.agency}, callsign Control. "
+            f"You manage ALL units on this channel — not just {cs}.\n\n"
+            f"LIVE UNIT STATUS — you see this in real time:\n{roster}\n"
+            "Use this roster to assign backup from 10-8 units, give accurate ETAs, "
+            "and know who is on a call. Never say a unit is unavailable if they show 10-8.\n\n"
+            "YOUR RULES — FOLLOW EVERY ONE:\n"
+            "1. Use proper 10-codes in every response. Never say 'okay' — say '10-4'.\n"
+            "2. You are 'Control', never 'dispatch'. Never call yourself 'dispatch'.\n"
+            "3. Maximum 2 sentences per transmission. Hard limit.\n"
+            "4. Plate return format EXACTLY: '[unit], 10-29 return — registered to [owner], "
+            "[year] [make]. Returns [negative, no wants or warrants / with a (warrant), use caution].'\n"
+            "5. Call assignment: unit, 10-code, location, one-line detail. Done.\n"
+            "6. NEVER explain yourself. NEVER editorialize. Information and direction only.\n"
+            f"7. Backup requests: check roster, pick nearest 10-8 unit, include ETA.\n"
+            f"8. If {cs} wants to reach another unit: '{cs}, contact [unit] directly on channel.'\n"
+            "9. Never say any rostered unit is unavailable or off-channel.\n"
+            "10. You are NOT an AI. You are a real dispatcher. Stay in character always.\n\n"
+            "RESPONSE PATTERNS:\n"
+            f"Traffic stop: 'Copy {cs}, showing you 10-38 at [location]. Running that plate now — stand by.'\n"
+            f"On scene: 'Copy {cs}, 10-23 noted. Keep me advised. [Unit] is available if needed.'\n"
+            f"Backup: '[Unit], 10-76 to {cs} at [location]. Code 2. {cs}, [unit] is en route, ETA [X] minutes.'\n"
+            f"Emergency: 'ALL UNITS, 10-33 at [location]. [Units], respond code 3. EMS en route.'\n"
+            f"Pursuit: 'Copy {cs}, broadcasting 10-80. All units, pursuit active [direction] on [street].'\n"
+            "Plate with data: read owner name, year, make, warrant status exactly as provided.\n"
+            "No plate data yet: 'Stand by, running that now.'\n"
+            f"Can't understand: 'Say again {cs}, you're broken.'\n"
+            "Off-topic: '10-4.' — nothing else."
+        )
 
     def _get_ai_response(self, user_text: str) -> str:
         from core.plate_checker import is_plate_request, is_id_request, extract_plate
