@@ -717,7 +717,6 @@ class AIDispatcher:
                 text=text,
                 reference_id=ref_id,
                 latency="normal",
-                backend="s2-pro",
                 format="mp3",
             )
         except Exception as e:
