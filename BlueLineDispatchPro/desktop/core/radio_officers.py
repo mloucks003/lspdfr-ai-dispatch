@@ -150,6 +150,11 @@ class RadioOfficerManager:
         self.on_dispatch_ack:    Optional[Callable[[str], None]]      = None
         self._dispatch_speak_fn: Optional[Callable[[str], None]]      = None
 
+        # Shared mic-suppression event from AIDispatcher.
+        # When set, the VAD in the dispatcher ignores audio queue chunks.
+        # We set it before playing any officer audio and clear it after.
+        self.mic_suppressed: Optional[threading.Event] = None
+
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def set_dispatch_speak(self, fn: Callable[[str], None]):
@@ -323,6 +328,9 @@ class RadioOfficerManager:
         import sounddevice as sd
         from scipy import signal as sp_sig
         cs = officer["callsign"]
+        # Suppress dispatcher mic so the officer audio is never captured by VAD
+        if self.mic_suppressed is not None:
+            self.mic_suppressed.set()
         try:
             mp3 = self._tts(text, officer.get("voice_id"))
             if not mp3:
@@ -345,3 +353,8 @@ class RadioOfficerManager:
             sd.play(fx, samplerate=self.SAMPLE_RATE, blocking=True)
         except Exception as e:
             logger.error(f"Officer speak: {e}")
+        finally:
+            # Tail delay then re-enable mic (dispatch's _flush_queue handles the queue)
+            time.sleep(0.50)
+            if self.mic_suppressed is not None:
+                self.mic_suppressed.clear()

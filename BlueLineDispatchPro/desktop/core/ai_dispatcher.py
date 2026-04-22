@@ -65,6 +65,16 @@ class AIDispatcher:
         self._audio_q: queue.Queue = queue.Queue(maxsize=200)
         self._conversation: list   = []
 
+        # ── Mic suppression during playback ───────────────────────────────────
+        # When set, _wait_for_speech_then_record discards all incoming audio.
+        # Prevents speaker bleed being picked up as user speech.
+        self._mic_suppressed = threading.Event()   # SET = suppress, CLEAR = listen
+
+        # ── Address-routing state ──────────────────────────────────────────────
+        # Tracks who the player last explicitly addressed.
+        # Subsequent transmissions without a new address go to the same entity.
+        self._last_addressee: str = "dispatch"
+
         # Public callbacks — wired by dispatcher_main.py
         self.on_state_change      = None
         self.on_user_speech       = None
@@ -97,6 +107,8 @@ class AIDispatcher:
         self._officers.set_dispatch_speak(self._speak)
         self._officers.on_officer_speech  = self._on_officer_chatter
         self._officers.on_dispatch_ack    = self._on_dispatch_ack
+        # Share the suppression event so officer audio also silences the mic
+        self._officers.mic_suppressed     = self._mic_suppressed
 
     # ── Vosk ──────────────────────────────────────────────────────────────────
 
@@ -249,31 +261,51 @@ class AIDispatcher:
         "code 3", "respond to", "another unit",
     ]
 
+    # Words that mean the player is explicitly addressing dispatch
+    _DISPATCH_ADDRESS = [
+        "county", "dispatch", "control", "lspd", "all units",
+        "supervisor", "comm", "communications", "sergeant", "watch commander",
+    ]
+
     def _is_backup_request(self, text: str) -> bool:
         t = text.lower()
         return any(p in t for p in self._BACKUP_PHRASES)
 
+    def _detect_addressee(self, text: str) -> str:
+        """
+        Return 'dispatch', an officer callsign, or '' (no explicit address — use last).
+        Priority:  dispatch keywords > officer callsigns > none.
+        """
+        t = text.lower()
+        # Explicit dispatch address
+        if any(w in t for w in self._DISPATCH_ADDRESS):
+            return "dispatch"
+        # Specific officer named
+        named = self._officers.detect_named_officer(text)
+        if named:
+            return named
+        return ""   # no explicit address
+
     def _run_session(self):
         """
-        Opens a radio channel. Acknowledges, then loops:
-          listen → process → respond → listen → ...
-        until SESSION_TIMEOUT seconds of silence, then returns to idle.
+        Opens a radio channel, then loops: listen → route → respond → listen ...
+        until SESSION_TIMEOUT silence or the officer explicitly clears.
+
+        Address routing:
+          • "[callsign] county / dispatch / LSPD / control …"  → dispatch
+          • "[callsign] to [officer callsign] …"               → that officer only
+          • No explicit address                                 → same as last turn
         """
-        self._in_session = True
-        self._officers.pause()    # freeze background chatter while player talks
+        self._in_session  = True
+        self._officers.pause()   # freeze background chatter while player talks
         try:
-            # Opening acknowledgment
+            # Opening acknowledgment from dispatch (always — player said their callsign)
             ack = f"{self.callsign}, go ahead."
             self._speak(ack)
             if self.on_dispatcher_speech:
                 self.on_dispatcher_speech(ack)
 
             while self._running:
-                # Wait for speaker audio to fully die out before listening.
-                # 0.8s covers most TTS playback tail + headphone reverb.
-                time.sleep(0.8)
-                self._flush_queue()
-
                 self._set_state("session_wait")
                 audio = self._wait_for_speech_then_record()
 
@@ -285,48 +317,51 @@ class AIDispatcher:
                 text = self._transcribe(audio)
                 logger.info(f"[{self.callsign}]: {text!r}")
 
-                # Reject bleed/game audio — must be at least 4 words OR a known
-                # short command (code 4, negative, 10-4, etc.)
+                # Reject bleed/short noise
                 SHORT_COMMANDS = {
-                    "code 4", "code four", "10-4", "negative",
-                    "affirmative", "10-8", "copy", "go ahead",
-                    "stand by", "standby", "clear",
+                    "code 4", "code four", "10-4", "negative", "affirmative",
+                    "10-8", "copy", "go ahead", "stand by", "standby", "clear",
                 }
                 words = text.strip().split()
-                is_short_cmd = any(sc in text.lower() for sc in SHORT_COMMANDS)
-                if not text or (len(words) < 4 and not is_short_cmd):
-                    logger.info(f"Ignoring short/bleed capture: {text!r}")
+                if not text or (len(words) < 4 and not any(sc in text.lower() for sc in SHORT_COMMANDS)):
+                    logger.info(f"Ignoring short/bleed: {text!r}")
                     continue
 
                 if self.on_user_speech:
                     self.on_user_speech(text)
 
-                ai_text = self._get_ai_response(text)
-                logger.info(f"[DISPATCH]: {ai_text!r}")
+                # ── Determine who the player is talking to ────────────────────
+                addressee = self._detect_addressee(text)
+                if addressee:
+                    self._last_addressee = addressee
+                else:
+                    addressee = self._last_addressee  # continue with last entity
 
-                self._set_state("responding")
-                if self.on_dispatcher_speech:
-                    self.on_dispatcher_speech(ai_text)
-                self._speak(ai_text)
+                # ── Route the transmission ────────────────────────────────────
+                if addressee == "dispatch":
+                    # Normal dispatch flow
+                    ai_text = self._get_ai_response(text)
+                    logger.info(f"[DISPATCH]: {ai_text!r}")
+                    self._set_state("responding")
+                    if self.on_dispatcher_speech:
+                        self.on_dispatcher_speech(ai_text)
+                    self._speak(ai_text)
 
-                # ── Post-dispatch follow-ups ──────────────────────────────────
-                # 1. Backup request → have the assigned unit confirm over radio
-                if self._is_backup_request(text):
-                    named = self._officers.detect_named_officer(text)
-                    assigned = named or self._officers.random_callsign()
-                    threading.Thread(
-                        target=self._officers.officer_confirm_backup,
-                        args=(assigned, 2.0),
-                        daemon=True,
-                    ).start()
+                    # Backup? → assigned unit confirms after dispatch responds
+                    if self._is_backup_request(text):
+                        named    = self._officers.detect_named_officer(text)
+                        assigned = named or self._officers.random_callsign()
+                        threading.Thread(
+                            target=self._officers.officer_confirm_backup,
+                            args=(assigned, 1.8),
+                            daemon=True,
+                        ).start()
 
-                # 2. Player addressed a specific officer → that officer replies
-                elif self._officers.detect_named_officer(text):
-                    threading.Thread(
-                        target=self._officers.handle_player_address,
-                        args=(text,),
-                        daemon=True,
-                    ).start()
+                else:
+                    # Player is talking to a specific officer — dispatch stays silent
+                    logger.info(f"[ROUTE] Player → {addressee}")
+                    self._set_state("responding")
+                    self._officers.handle_player_address(text)   # blocking — plays inline
 
                 # Close session if officer signed off
                 if self._is_closing_transmission(text):
@@ -338,8 +373,9 @@ class AIDispatcher:
             if self.on_error:
                 self.on_error(str(e))
         finally:
-            self._in_session = False
-            self._officers.resume()   # let background chatter resume
+            self._in_session  = False
+            self._last_addressee = "dispatch"   # reset for next session
+            self._officers.resume()
             self._set_state("idle")
             self._flush_queue()
 
@@ -372,6 +408,12 @@ class AIDispatcher:
             except queue.Empty:
                 if not self._running:
                     return None
+                continue
+
+            # ── Mic suppression guard ─────────────────────────────────────────
+            # Drop this chunk if dispatch/officer audio is currently playing.
+            # Prevents speaker bleed from triggering VAD or reaching Whisper.
+            if self._mic_suppressed.is_set():
                 continue
 
             rms = int(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
@@ -559,10 +601,11 @@ YOU ARE THE DISPATCHER ONLY. Never break character. Never say you are an AI."""
     _DISPATCH_VOICE_SENTINEL = "__dispatch__"
 
     def _speak(self, text: str):
-        """Dispatch voice (ALLE) only. Always uses the configured dispatch voice ID."""
+        """Dispatch voice (ALLE) only. Always uses the configured dispatch voice ID.
+        Suppresses the mic for the full duration so speaker audio is never captured."""
         intensity = float(self.config.get("radio_intensity", 0.82))
+        self._mic_suppressed.set()      # block VAD now
         try:
-            # Explicitly request the dispatch voice — never fall through to any other default
             mp3_bytes = self._tts_fishaudio(text, self._DISPATCH_VOICE_SENTINEL)
             if not mp3_bytes:
                 return
@@ -574,6 +617,10 @@ YOU ARE THE DISPATCHER ONLY. Never break character. Never say you are an AI."""
             sd.play(self._radio_fx(s, intensity), samplerate=SAMPLE_RATE, blocking=True)
         except Exception as e:
             logger.error(f"Speak: {e}")
+        finally:
+            time.sleep(0.50)            # tail delay: let speaker reverb die
+            self._flush_queue()         # discard any bleed that made it into the queue
+            self._mic_suppressed.clear()  # re-enable VAD
 
     def _tts_with_voice(self, text: str, voice_id: str = None) -> bytes | None:
         """
