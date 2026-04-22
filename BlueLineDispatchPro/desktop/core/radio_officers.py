@@ -350,10 +350,14 @@ class RadioOfficerManager:
             if not mp3:
                 return
             from pydub import AudioSegment
+            from pydub.effects import speedup as _speedup
             audio = (AudioSegment.from_mp3(io.BytesIO(mp3))
                      .set_channels(1)
                      .set_frame_rate(self.SAMPLE_RATE)
                      .set_sample_width(2))
+            spd = float(self._config.get("tts_speed", 1.20))
+            if spd != 1.0:
+                audio = _speedup(audio, playback_speed=spd, chunk_size=150, crossfade=20)
             s  = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
             fx = self._radio_fx(s, float(self._config.get("radio_intensity", 0.82)))
 

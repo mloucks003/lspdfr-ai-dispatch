@@ -634,8 +634,12 @@ YOU ARE THE DISPATCHER ONLY. Never break character. Never say you are an AI."""
             if not mp3_bytes:
                 return
             from pydub import AudioSegment
+            from pydub.effects import speedup as _speedup
             audio = (AudioSegment.from_mp3(io.BytesIO(mp3_bytes))
                      .set_channels(1).set_frame_rate(SAMPLE_RATE).set_sample_width(2))
+            spd = float(self.config.get("tts_speed", 1.20))
+            if spd != 1.0:
+                audio = _speedup(audio, playback_speed=spd, chunk_size=150, crossfade=20)
             s = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
             self._squelch_click()                                               # key-up
             sd.play(self._radio_fx(s, intensity), samplerate=SAMPLE_RATE, blocking=True)
