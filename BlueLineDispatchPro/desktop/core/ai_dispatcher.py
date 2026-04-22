@@ -73,6 +73,11 @@ class AIDispatcher:
         # Prevents speaker bleed being picked up as user speech.
         self._mic_suppressed = threading.Event()   # SET = suppress, CLEAR = listen
 
+        # ── Session-active flag — shared with IncidentEngine and BehaviorLoop ─
+        # When set, background transmissions hold fire so they don't compete
+        # with a live player conversation.
+        self._session_active = threading.Event()
+
         # ── Address-routing state ──────────────────────────────────────────────
         # Tracks who the player last explicitly addressed.
         # Subsequent transmissions without a new address go to the same entity.
@@ -113,6 +118,25 @@ class AIDispatcher:
         # Share the suppression event so officer audio also silences the mic
         self._officers.mic_suppressed     = self._mic_suppressed
 
+        # ── Incident engine + officer behavior loops ───────────────────────────
+        from core.incident_engine   import IncidentEngine
+        from core.officer_behavior  import OfficerBehaviorLoop
+
+        self._behavior_loop = OfficerBehaviorLoop(
+            officers          = self._officers.officers,
+            officer_speak_fn  = self._officers._speak_as_officer,
+            dispatch_speak_fn = self._speak,
+            session_active    = self._session_active,
+        )
+        self._incident_engine = IncidentEngine(
+            dispatch_callback  = self._speak,
+            behavior_callback  = self._behavior_loop.handle_incident,
+            player_callsign    = self.callsign,
+            session_active     = self._session_active,
+            min_interval       = float(config.get("incident_min_interval", 90.0)),
+            max_interval       = float(config.get("incident_max_interval", 270.0)),
+        )
+
     # ── Vosk ──────────────────────────────────────────────────────────────────
 
     def _load_vosk(self):
@@ -137,6 +161,7 @@ class AIDispatcher:
         threading.Thread(target=self._main_loop, daemon=True,
                          name="dispatcher").start()
         self._officers.start()
+        self._incident_engine.start()
         logger.info(f"AIDispatcher started — listening for '{self.callsign}'")
 
     def _calibrate_mic(self):
@@ -180,6 +205,7 @@ class AIDispatcher:
 
     def stop(self):
         self._running = False
+        self._incident_engine.stop()
         self._officers.stop()
         if self._stream:
             self._stream.stop()
@@ -355,7 +381,8 @@ class AIDispatcher:
           • No explicit address                                 → same as last turn
         """
         self._in_session  = True
-        self._officers.pause()   # freeze background chatter while player talks
+        self._session_active.set()     # pause incident engine + behavior loops
+        self._officers.pause()         # freeze background officer chatter
         try:
             # Opening acknowledgment from dispatch (always — player said their callsign)
             ack = f"{self.callsign}, go ahead."
@@ -428,6 +455,7 @@ class AIDispatcher:
         finally:
             self._in_session  = False
             self._last_addressee = "dispatch"   # reset for next session
+            self._session_active.clear()  # resume incident engine + behavior loops
             self._officers.resume()
             self._set_state("idle")
             self._flush_queue()
