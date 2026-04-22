@@ -73,6 +73,60 @@ _CHATTER_EVENTS = [
 _EVENT_LABELS   = [e[0] for e in _CHATTER_EVENTS]
 _EVENT_WEIGHTS  = [e[1] for e in _CHATTER_EVENTS]
 
+# ── Spoken-number alias engine ────────────────────────────────────────────────
+# Whisper transcribes numbers as words ("three", "forty-one").
+# This maps every word-form to its digit so "King three" matches "King-3".
+_WORD_TO_NUM: dict[str, str] = {
+    # Single digits
+    "zero": "0", "oh": "0",
+    "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+    "six": "6", "seven": "7", "eight": "8", "nine": "9", "niner": "9",
+    # Teens
+    "ten": "10", "eleven": "11", "twelve": "12", "thirteen": "13",
+    "fourteen": "14", "fifteen": "15", "sixteen": "16", "seventeen": "17",
+    "eighteen": "18", "nineteen": "19",
+    # Compound numbers Whisper commonly produces for police callsigns
+    "twenty": "20", "twenty one": "21", "twenty-one": "21",
+    "thirty": "30", "thirty one": "31", "thirty-one": "31",
+    "forty": "40",
+    "forty one": "41",  "forty-one": "41",  "four one": "41",
+    "forty two": "42",  "forty-two": "42",  "four two": "42",
+    "forty three": "43","forty-three": "43","four three": "43",
+    "forty four": "44", "forty-four": "44", "four four": "44",
+    "forty five": "45", "forty-five": "45", "four five": "45",
+    "forty six": "46",  "forty-six": "46",
+    "forty seven": "47","forty-seven": "47",
+    "forty eight": "48","forty-eight": "48",
+    "forty nine": "49", "forty-nine": "49",
+    "fifty": "50",
+}
+
+# Reverse map: digit-string → list of word-forms it might be spoken as
+_NUM_TO_WORDS: dict[str, list[str]] = {}
+for _w, _d in _WORD_TO_NUM.items():
+    _NUM_TO_WORDS.setdefault(_d, []).append(_w)
+
+
+def _callsign_aliases(callsign: str) -> list[str]:
+    """
+    Return all text forms Whisper might produce for a callsign.
+      "King-3"    → ["king-3", "king 3", "king three", "king niner"]
+      "Sam-41"    → ["sam-41", "sam 41", "sam forty one", "sam four one", ...]
+      "Lincoln-9" → ["lincoln-9", "lincoln 9", "lincoln nine", "lincoln niner"]
+    Called once per detection attempt — fast enough to do inline.
+    """
+    cs_l  = callsign.lower()
+    parts = cs_l.split("-")
+    if len(parts) != 2:
+        return [cs_l]
+    prefix, num = parts
+    aliases: set[str] = {cs_l, f"{prefix} {num}"}        # "king-3", "king 3"
+    for spoken in _NUM_TO_WORDS.get(num, []):
+        aliases.add(f"{prefix} {spoken}")                 # "king three"
+        aliases.add(f"{prefix}-{spoken}")                 # "king-three"
+    return list(aliases)
+
+
 # Distinct squelch-click frequencies per unit (Hz).
 # Listeners learn to recognise each officer by their key-up tone.
 _OFFICER_SQUELCH_HZ = {
@@ -165,6 +219,11 @@ class RadioOfficerManager:
         # When set, the VAD in the dispatcher ignores audio queue chunks.
         # We set it before playing any officer audio and clear it after.
         self.mic_suppressed: Optional[threading.Event] = None
+
+        # Per-officer conversation memory — keeps the last N exchanges so
+        # each officer remembers the context of what you said to them.
+        # Keyed by callsign, value is a list of {role, content} dicts.
+        self._officer_convos: dict[str, list[dict]] = {}
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -369,52 +428,77 @@ class RadioOfficerManager:
             logger.error(f"GPT chatter: {e}"); return ""
 
     def _generate_officer_response(self, officer: dict, player_text: str) -> str:
-        cs = officer["callsign"]
+        """
+        Generate an AI response for this officer, maintaining a per-officer
+        conversation history so they remember context across multiple exchanges.
+        """
+        cs      = officer["callsign"]
+        loc     = officer.get("location", "your location")
+        history = self._officer_convos.setdefault(cs, [])
+
+        # Add the player's latest message to this officer's history
+        history.append({"role": "user", "content": f"{self.player_callsign}: '{player_text}'"})
+
+        # Keep the last 10 exchanges (20 messages) to stay within token budget
+        if len(history) > 20:
+            history[:] = history[-20:]
+
+        system = (
+            f"You are LSPD officer {cs}, currently at {loc}. "
+            f"You are talking directly to officer {self.player_callsign} on a shared radio channel. "
+            "You are a real patrol officer — not a dispatcher. Respond as one officer to another. "
+            "You have your own calls, status, and situation. "
+            "Include what you're doing, your location, and your availability or ETA when relevant. "
+            "Use 10-codes naturally. 15-30 words per transmission. Start with your callsign. "
+            "No filler. No pleasantries. Real scanner cadence."
+        )
         try:
             r = self._openai.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": (
-                        f"You are LSPD officer {cs} on a radio channel. "
-                        f"Reply to {self.player_callsign}'s transmission. "
-                        "Respond like a real officer on a scanner — include your current location, "
-                        "what you're doing, your ETA if relevant, and any tactical details. "
-                        "Use 10-codes naturally. 15-25 words. Start with your callsign. "
-                        "No filler. No pleasantries. Raw radio speech only."
-                    )},
-                    {"role": "user",   "content": f"{self.player_callsign}: '{player_text}'"},
-                ],
-                max_tokens=70, temperature=0.78,
+                messages=[{"role": "system", "content": system}] + history,
+                max_tokens=80, temperature=0.78,
             )
-            return r.choices[0].message.content.strip().strip('"').strip("'")
+            reply = r.choices[0].message.content.strip().strip('"').strip("'")
+            # Store the officer's reply in history for next turn
+            history.append({"role": "assistant", "content": reply})
+            return reply
         except Exception as e:
             logger.error(f"GPT officer response: {e}"); return ""
 
     # ── Player address detection ───────────────────────────────────────────────
 
-    def handle_player_address(self, player_text: str) -> bool:
-        """If the player named a specific officer, have them respond. Returns True if handled."""
-        tl = player_text.lower()
-        for cs, officer in self.officers.items():
-            if cs.lower() in tl or cs.lower().replace("-", " ") in tl:
-                response = self._generate_officer_response(officer, player_text)
-                if response:
-                    logger.info(f"[{cs}] (response): {response!r}")
-                    time.sleep(0.6)
-                    with self._play_lock:
-                        self._speak_as_officer(officer, response)
-                    if self.on_officer_speech:
-                        self.on_officer_speech(cs, response)
-                return True
-        return False
-
     def detect_named_officer(self, text: str) -> Optional[str]:
-        """Return callsign if a specific officer is named in text, else None."""
+        """
+        Return the callsign of any officer named in `text`, or None.
+        Handles spoken-number variants: "King three" matches "King-3",
+        "Sam forty-one" matches "Sam-41", "Lincoln niner" matches "Lincoln-9".
+        """
         tl = text.lower()
         for cs in self.officers:
-            if cs.lower() in tl or cs.lower().replace("-", " ") in tl:
-                return cs
+            for alias in _callsign_aliases(cs):
+                if alias in tl:
+                    return cs
         return None
+
+    def handle_player_address(self, player_text: str) -> bool:
+        """
+        If the player named a specific officer, have that officer respond.
+        Uses alias-aware detection so spoken numbers work correctly.
+        Returns True if an officer was found and handled.
+        """
+        cs = self.detect_named_officer(player_text)
+        if not cs:
+            return False
+        officer  = self.officers[cs]
+        response = self._generate_officer_response(officer, player_text)
+        if response:
+            logger.info(f"[{cs}] (response): {response!r}")
+            time.sleep(0.6)
+            with self._play_lock:
+                self._speak_as_officer(officer, response)
+            if self.on_officer_speech:
+                self.on_officer_speech(cs, response)
+        return True
 
     def officer_confirm_backup(self, callsign: str, delay: float = 2.0):
         """Have the named officer confirm backup assignment over radio."""

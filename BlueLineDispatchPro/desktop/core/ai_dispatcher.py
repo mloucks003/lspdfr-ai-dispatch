@@ -261,10 +261,12 @@ class AIDispatcher:
         "code 3", "respond to", "another unit",
     ]
 
-    # Words that mean the player is explicitly addressing dispatch
+    # Words that mean the player is explicitly addressing dispatch.
+    # Checked BEFORE officer name matching so "Sam-44 county to King-3" → dispatch.
     _DISPATCH_ADDRESS = [
         "county", "dispatch", "control", "lspd", "all units",
         "supervisor", "comm", "communications", "sergeant", "watch commander",
+        "radio", "central", "base", "command",
     ]
 
     def _is_backup_request(self, text: str) -> bool:
@@ -273,18 +275,21 @@ class AIDispatcher:
 
     def _detect_addressee(self, text: str) -> str:
         """
-        Return 'dispatch', an officer callsign, or '' (no explicit address — use last).
-        Priority:  dispatch keywords > officer callsigns > none.
+        Return 'dispatch', an officer callsign, or '' (no explicit address — keep last).
+
+        Priority (first match wins):
+          1. Explicit dispatch keyword ("county", "dispatch", …)
+          2. Officer callsign — uses full spoken-number alias engine so
+             "King three", "Sam forty-one", "Lincoln niner" all work.
+          3. '' → caller decides what last addressee was
         """
         t = text.lower()
-        # Explicit dispatch address
         if any(w in t for w in self._DISPATCH_ADDRESS):
             return "dispatch"
-        # Specific officer named
         named = self._officers.detect_named_officer(text)
         if named:
             return named
-        return ""   # no explicit address
+        return ""   # no explicit address — session keeps using last addressee
 
     def _run_session(self):
         """
@@ -524,6 +529,8 @@ Plate return: Use ONLY the data provided in the system message. Read it all back
 Code 4 / clear: "Copy {cs}, code 4. Show you 10-8 and available."
 Can't understand: "Say again {cs}, you're broken."
 Off-topic / not police-related: respond only "10-4." — nothing more.
+If {cs} asks to speak with another unit: say "{cs}, go ahead and reach out to [unit] directly on channel."
+Never say another officer is "unavailable" or "not on this channel" — all listed units are on this channel.
 
 10-CODES (use naturally):
 10-4 copy, 10-8 available, 10-20 location, 10-23 on scene, 10-29 wants/warrants,
