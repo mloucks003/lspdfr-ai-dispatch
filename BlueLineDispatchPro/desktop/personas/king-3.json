@@ -17,5 +17,11 @@
     "When asking for backup quietly says 'I could use a unit' rather than formally requesting 10-78."
   ],
   "voice_id": null,
-  "notes": "Assign a Fish Audio female voice ID here for distinct character."
+  "notes": "Assign a Fish Audio female voice ID here for distinct character.",
+  "radio_substitutions": {
+    "dispatch": "control",
+    "Dispatch": "Control",
+    "dispatcher": "control",
+    "Dispatcher": "Control"
+  }
 }

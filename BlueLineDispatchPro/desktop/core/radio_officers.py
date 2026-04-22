@@ -41,6 +41,18 @@ def _load_persona(callsign: str) -> dict:
     return {}
 
 
+def _apply_persona_substitutions(text: str, persona: dict) -> str:
+    """
+    Apply radio_substitutions from the persona file as a final safety net.
+    Even if GPT ignores the instruction to say 'control' instead of 'dispatch',
+    this catches any remaining violations before the text hits TTS.
+    Example:  {"dispatch": "control", "Dispatch": "Control"}
+    """
+    for old, new in persona.get("radio_substitutions", {}).items():
+        text = text.replace(old, new)
+    return text
+
+
 def _clean_response(text: str, callsign: str) -> str:
     """
     Strip GPT formatting artifacts that TTS would speak aloud literally:
@@ -484,28 +496,27 @@ class RadioOfficerManager:
         name        = persona.get("full_name", f"Officer {persona.get('name', cs)}")
         personality = persona.get("personality", "Calm patrol officer.")
         style       = persona.get("speech_style", "Clipped. 10-codes. Real scanner cadence.")
-        quirks      = "\n".join(f"- {q}" for q in persona.get("quirks", []))
+        quirk_lines = "\n".join(f"- {q}" for q in persona.get("quirks", []))
         roster      = world_state.roster_for_prompt()
 
-        system = f"""You are {name}, callsign {cs}, LSPD patrol officer.
-
-CHARACTER:
-{personality}
-Speech: {style}
-{"Quirks:" + chr(10) + quirks if quirks else ""}
-
-CURRENT STATUS: {officer.get('status','10-8')} at {loc}
-
-LIVE UNIT ROSTER — you are aware of all of this in real time:
-{roster}
-
-RULES:
-- You are talking directly to {self.player_callsign} on the shared radio channel.
-- Output RAW SPEECH ONLY. No callsign prefix. No quotation marks. No stage directions.
-- Do NOT start your response with "{cs}:" or "{cs},". Just speak.
-- 15-30 words. Natural radio cadence. Use 10-codes where appropriate.
-- Reflect your character. Stay in persona at all times."""
-
+        system = (
+            f"You are {name}, callsign {cs}, LSPD patrol officer.\n\n"
+            f"CHARACTER: {personality}\n"
+            f"SPEECH STYLE: {style}\n"
+            + (f"YOUR SPEECH QUIRKS — ALWAYS FOLLOW THESE:\n{quirk_lines}\n\n" if quirk_lines else "\n")
+            + f"CURRENT STATUS: {officer.get('status', '10-8')} at {loc}\n\n"
+            f"LIVE UNIT ROSTER:\n{roster}\n\n"
+            f"RULES — READ EVERY ONE:\n"
+            f"- You are talking directly to {self.player_callsign} on a shared radio channel.\n"
+            f"- Output RAW SPEECH ONLY. No callsign prefix like '{cs}:'. No quotes. No stage directions.\n"
+            f"- Do NOT start with '{cs}:' or '{cs},' — just speak the words.\n"
+            f"- NEVER repeat or paraphrase what {self.player_callsign} just said.\n"
+            f"- NEVER acknowledge by restating their transmission ('Copy, you said X...').\n"
+            f"- Respond with NEW information only: your status, location, ETA, a question, or a short ack.\n"
+            f"- If you have nothing to add: say 'Copy.' or '10-4.' and STOP. Do not pad.\n"
+            f"- 1-2 sentences maximum. Hard limit.\n"
+            f"- Use 10-codes naturally. Stay in persona at all times."
+        )
         try:
             r = self._openai.chat.completions.create(
                 model="gpt-4o-mini",
@@ -514,6 +525,7 @@ RULES:
             )
             raw   = r.choices[0].message.content
             reply = _clean_response(raw, cs)
+            reply = _apply_persona_substitutions(reply, persona)
             history.append({"role": "assistant", "content": reply})
             return reply
         except Exception as e:
