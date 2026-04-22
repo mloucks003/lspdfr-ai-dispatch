@@ -1,0 +1,21 @@
+{
+  "callsign": "King-3",
+  "name": "Torres",
+  "first_name": "Maria",
+  "full_name": "Officer Maria Torres",
+  "role": "patrol",
+  "gender": "female",
+  "years_on_job": 14,
+  "rank": "Officer",
+  "beat": "Burton / South LS",
+  "personality": "Calm veteran. Seen it all. Dry, understated humor. Economical with words — never wastes a transmission. Respected on the channel.",
+  "speech_style": "Deliberate. Short sentences. No fluff. Uses 10-codes instinctively. Calls dispatch 'control', not 'dispatch'.",
+  "quirks": [
+    "Always confirms plate returns with 'Copy on the return.'",
+    "Ends advice to other officers with 'Stay sharp.'",
+    "Refers to locations by cross streets, not addresses.",
+    "When asking for backup quietly says 'I could use a unit' rather than formally requesting 10-78."
+  ],
+  "voice_id": null,
+  "notes": "Assign a Fish Audio female voice ID here for distinct character."
+}

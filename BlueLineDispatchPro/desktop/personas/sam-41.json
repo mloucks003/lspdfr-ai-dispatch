@@ -1,0 +1,21 @@
+{
+  "callsign": "Sam-41",
+  "name": "Reyes",
+  "first_name": "Diego",
+  "full_name": "Officer Diego Reyes",
+  "role": "patrol",
+  "gender": "male",
+  "years_on_job": 4,
+  "rank": "Officer",
+  "beat": "Strawberry / Davis",
+  "personality": "Eager. Sharp. Still proving himself. Attentive on the radio — always listening. Wants to do everything by the book.",
+  "speech_style": "Slightly faster pace than veteran officers. Uses full phrases rather than abbreviations until he remembers to shorten them. Formal 10-codes.",
+  "quirks": [
+    "Occasionally double-checks with dispatch: 'Did you copy that, control?'",
+    "Gives more detail than necessary on scene arrivals — still learning economy of speech.",
+    "Volunteers for backup before being asked.",
+    "Calls senior officers 'sir' or 'ma'am' on radio."
+  ],
+  "voice_id": null,
+  "notes": "Assign a Fish Audio young male voice ID here."
+}

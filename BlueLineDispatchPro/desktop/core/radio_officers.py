@@ -11,7 +11,10 @@ Configure officers in settings.json under "officers" or ai_config.json.
 Set voice_id to a Fish Audio reference ID (find them at fish.audio/voices).
 Leave voice_id null to use Fish Audio's platform default voice.
 """
+import json
 import logging
+import os
+import re
 import random
 import threading
 import time
@@ -19,7 +22,37 @@ from typing import Callable, Optional
 
 import numpy as np
 
+from core.world_state import world_state, UnitStatus
+
 logger = logging.getLogger(__name__)
+
+# ── Persona loader ────────────────────────────────────────────────────────────
+_PERSONAS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "personas")
+
+
+def _load_persona(callsign: str) -> dict:
+    """Load persona JSON for a callsign, e.g. 'King-3' → personas/king-3.json.
+    Returns an empty dict if the file doesn't exist yet."""
+    fname = os.path.join(_PERSONAS_DIR, f"{callsign.lower()}.json")
+    if os.path.isfile(fname):
+        with open(fname, encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def _clean_response(text: str, callsign: str) -> str:
+    """
+    Strip GPT formatting artifacts that TTS would speak aloud literally:
+      • Leading callsign prefix  →  'King-3: "Go ahead..."'  →  'Go ahead...'
+      • Surrounding quotation marks
+      • Redundant nested quotes
+    """
+    text = text.strip()
+    # Remove  "Callsign: " or "Callsign, " prefix at the very start
+    text = re.sub(rf'^{re.escape(callsign)}[\s:,\"]+', '', text, flags=re.IGNORECASE)
+    # Remove leading/trailing straight or curly quotes
+    text = text.strip('"\'').strip('\u201c\u201d\u2018\u2019')
+    return text.strip()
 
 # ── GTA V / Los Santos locations ─────────────────────────────────────────────
 _LOCATIONS = [
@@ -194,18 +227,26 @@ class RadioOfficerManager:
         raw = config.get("officers", DEFAULT_OFFICERS)
         self.officers: dict[str, dict] = {}
         for o in raw:
-            cs = o["callsign"]
+            cs      = o["callsign"]
+            persona = _load_persona(cs)        # load personas/king-3.json etc.
+            loc     = random.choice(_LOCATIONS)
             self.officers[cs] = {
-                "callsign": cs,
-                "name":     o.get("name", cs),
-                "voice_id": o.get("voice_id") or None,
-                "gender":   o.get("gender", "male"),
-                "status":   "10-8",
-                "location": random.choice(_LOCATIONS),
+                "callsign":    cs,
+                "name":        persona.get("name") or o.get("name", cs),
+                "voice_id":    o.get("voice_id") or persona.get("voice_id") or None,
+                "gender":      persona.get("gender") or o.get("gender", "male"),
+                "status":      "10-8",
+                "location":    loc,
+                "persona":     persona,           # full persona dict for prompts
             }
+            # Register in world state so every agent sees this unit
+            world_state.register(cs, persona.get("name", cs), location=loc)
 
         self.player_callsign = config.get("callsign", "Sam-44")
         self.agency          = config.get("agency", "LSPD")
+        # Register the player unit in world state
+        world_state.register(self.player_callsign, self.player_callsign,
+                              is_player=True)
 
         self._min_interval = float(config.get("chatter_min_seconds", 40))
         self._max_interval = float(config.get("chatter_max_seconds", 100))
@@ -377,89 +418,107 @@ class RadioOfficerManager:
     # ── GPT helpers ───────────────────────────────────────────────────────────
 
     def _generate_officer_line(self, officer: dict, event: str) -> str:
-        cs  = officer["callsign"]
-        loc = random.choice(_LOCATIONS)
-        veh = random.choice(_VEHICLES)
+        """Generate a background chatter line for this officer doing `event`."""
+        cs      = officer["callsign"]
+        persona = officer.get("persona", {})
+        loc     = random.choice(_LOCATIONS)
+        veh     = random.choice(_VEHICLES)
         officer["location"] = loc
 
+        # Update world state to reflect the new status/location/incident
+        _EVENT_STATUS = {
+            "traffic_stop":  (UnitStatus.TRAFFIC,   f"traffic stop on {veh}"),
+            "clear":         (UnitStatus.AVAILABLE,  None),
+            "scene_arrival": (UnitStatus.ON_SCENE,   f"scene at {loc}"),
+            "patrol_obs":    (UnitStatus.AVAILABLE,   None),
+            "request_info":  (UnitStatus.AVAILABLE,   None),
+        }
+        new_status, new_incident = _EVENT_STATUS.get(event, (UnitStatus.AVAILABLE, None))
+        world_state.update(cs, status=new_status, location=loc, incident=new_incident)
+
+        personality = persona.get("personality", "Calm patrol officer.")
+        style       = persona.get("speech_style", "Radio cadence. 10-codes.")
+        name        = persona.get("name", cs)
+
+        system = (
+            f"You are {name} ({cs}), LSPD patrol officer. "
+            f"Character: {personality} Speech style: {style} "
+            "Write ONE realistic police radio transmission for the event described. "
+            "RAW SPEECH ONLY — no quotes, no callsign prefix, no stage directions, no narration. "
+            "Do NOT start with the callsign as a label. Just write the words the officer speaks. "
+            "Use 10-codes. Include specific details (vehicle color, plate, location, direction). "
+            "20-30 words."
+        )
         prompts = {
-            "traffic_stop":  (
-                f"Write ONE police radio transmission: Officer {cs} is showing themselves on a traffic stop. "
-                f"Vehicle: {veh}. Location: {loc}. Include the vehicle color and direction of travel. "
-                f"Request a plate run. 20-30 words. Callsign first. Use 10-codes like 10-38."
-            ),
-            "clear":         (
-                f"Write ONE police radio transmission: Officer {cs} is going code 4 and returning to service from {loc}. "
-                f"Mention what they handled. 15-20 words. Callsign first. Use 10-codes."
-            ),
-            "scene_arrival": (
-                f"Write ONE police radio transmission: Officer {cs} is arriving on scene at {loc}. "
-                f"Describe what they observe — people, vehicles, activity. Request backup if needed. "
-                f"20-28 words. Callsign first. Use 10-23."
-            ),
-            "patrol_obs":    (
-                f"Write ONE police radio transmission: Officer {cs} advises dispatch of a suspicious {veh} at {loc}. "
-                f"Include direction of travel, occupant count, and what made it suspicious. "
-                f"20-30 words. Callsign first."
-            ),
-            "request_info":  (
-                f"Write ONE police radio transmission: Officer {cs} requests a plate/registration run on a {veh} at {loc}. "
-                f"Include a plausible plate number (e.g. 4ABC123) and ask for wants and warrants. "
-                f"20-28 words. Callsign first."
-            ),
+            "traffic_stop":  f"{cs} is showing 10-38 on a {veh} at {loc}. Include vehicle color, direction, and request a plate run.",
+            "clear":         f"{cs} is going code 4 and 10-8 from {loc}. Mention what they handled briefly.",
+            "scene_arrival": f"{cs} is arriving 10-23 at {loc}. Describe what they observe and whether backup is needed.",
+            "patrol_obs":    f"{cs} observes suspicious {veh} at {loc}. Include direction of travel, occupant count, what made it suspicious.",
+            "request_info":  f"{cs} requests a 10-29 plate run on a {veh} at {loc}. Include a made-up plate like 4ABC123.",
         }
         try:
             r = self._openai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": (
-                        "You write realistic LSPD police radio transmissions that sound exactly like a real scanner. "
-                        "Raw speech only — no quotes, no narration, no stage directions. "
-                        "Use 10-codes naturally. Include specific details: locations, vehicle descriptions, "
-                        "plate numbers, suspect descriptions, directions of travel. "
-                        "Always start with the officer's callsign. Match the length and detail of real dispatch recordings."
-                    )},
+                    {"role": "system", "content": system},
                     {"role": "user",   "content": prompts.get(event, prompts["patrol_obs"])},
                 ],
-                max_tokens=80, temperature=0.88,
+                max_tokens=90, temperature=0.90,
             )
-            return r.choices[0].message.content.strip().strip('"').strip("'")
+            raw = r.choices[0].message.content
+            return _clean_response(raw, cs)
         except Exception as e:
             logger.error(f"GPT chatter: {e}"); return ""
 
     def _generate_officer_response(self, officer: dict, player_text: str) -> str:
         """
-        Generate an AI response for this officer, maintaining a per-officer
-        conversation history so they remember context across multiple exchanges.
+        Generate an AI response for this officer.
+        Uses the officer's persona file for character consistency and the live
+        world state so the officer knows what every other unit is doing.
+        Maintains per-officer conversation history for multi-turn memory.
         """
         cs      = officer["callsign"]
-        loc     = officer.get("location", "your location")
+        persona = officer.get("persona", {})
+        loc     = officer.get("location", "Patrol")
         history = self._officer_convos.setdefault(cs, [])
 
-        # Add the player's latest message to this officer's history
         history.append({"role": "user", "content": f"{self.player_callsign}: '{player_text}'"})
-
-        # Keep the last 10 exchanges (20 messages) to stay within token budget
         if len(history) > 20:
             history[:] = history[-20:]
 
-        system = (
-            f"You are LSPD officer {cs}, currently at {loc}. "
-            f"You are talking directly to officer {self.player_callsign} on a shared radio channel. "
-            "You are a real patrol officer — not a dispatcher. Respond as one officer to another. "
-            "You have your own calls, status, and situation. "
-            "Include what you're doing, your location, and your availability or ETA when relevant. "
-            "Use 10-codes naturally. 15-30 words per transmission. Start with your callsign. "
-            "No filler. No pleasantries. Real scanner cadence."
-        )
+        name        = persona.get("full_name", f"Officer {persona.get('name', cs)}")
+        personality = persona.get("personality", "Calm patrol officer.")
+        style       = persona.get("speech_style", "Clipped. 10-codes. Real scanner cadence.")
+        quirks      = "\n".join(f"- {q}" for q in persona.get("quirks", []))
+        roster      = world_state.roster_for_prompt()
+
+        system = f"""You are {name}, callsign {cs}, LSPD patrol officer.
+
+CHARACTER:
+{personality}
+Speech: {style}
+{"Quirks:" + chr(10) + quirks if quirks else ""}
+
+CURRENT STATUS: {officer.get('status','10-8')} at {loc}
+
+LIVE UNIT ROSTER — you are aware of all of this in real time:
+{roster}
+
+RULES:
+- You are talking directly to {self.player_callsign} on the shared radio channel.
+- Output RAW SPEECH ONLY. No callsign prefix. No quotation marks. No stage directions.
+- Do NOT start your response with "{cs}:" or "{cs},". Just speak.
+- 15-30 words. Natural radio cadence. Use 10-codes where appropriate.
+- Reflect your character. Stay in persona at all times."""
+
         try:
             r = self._openai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "system", "content": system}] + history,
-                max_tokens=80, temperature=0.78,
+                max_tokens=90, temperature=0.82,
             )
-            reply = r.choices[0].message.content.strip().strip('"').strip("'")
-            # Store the officer's reply in history for next turn
+            raw   = r.choices[0].message.content
+            reply = _clean_response(raw, cs)
             history.append({"role": "assistant", "content": reply})
             return reply
         except Exception as e:

@@ -1,0 +1,21 @@
+{
+  "callsign": "Lincoln-9",
+  "name": "Mackenzie",
+  "first_name": "James",
+  "full_name": "Officer James Mackenzie",
+  "role": "patrol",
+  "gender": "male",
+  "years_on_job": 9,
+  "rank": "Officer",
+  "beat": "Rockford Hills / Vinewood",
+  "personality": "Steady. Methodical. The kind of officer who triple-checks a scene before calling code 4. Quiet confidence. Doesn't fill dead air.",
+  "speech_style": "Even, measured tempo. Never rushed. Uses pauses naturally — thinks before transmitting. Precise locations, precise descriptions.",
+  "quirks": [
+    "Always gives a full vehicle description: year, make, color, direction of travel.",
+    "Reads suspect descriptions in NCIC format: race, sex, age range, clothing.",
+    "Confirms backup assignments: 'Copy, Lincoln-9 is 10-76, ETA three minutes.'",
+    "Signs off every transmission with his callsign: '...Lincoln-9 out.'"
+  ],
+  "voice_id": null,
+  "notes": "Assign a Fish Audio mid-range male voice ID here."
+}

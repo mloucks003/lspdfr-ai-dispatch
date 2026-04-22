@@ -16,6 +16,8 @@ import threading
 import time
 import wave
 
+from core.world_state import world_state, UnitStatus
+
 import numpy as np
 import requests
 import sounddevice as sd
@@ -490,15 +492,15 @@ class AIDispatcher:
     # ── AI response ───────────────────────────────────────────────────────────
 
     def _system_prompt(self) -> str:
-        cs = self.callsign
-        # Build unit roster string so dispatch can reference them by name
-        unit_list = ", ".join(self._officers.officers.keys()) if self._officers.officers else "Sam-41, Lincoln-9, King-3"
+        cs      = self.callsign
+        roster  = world_state.roster_for_prompt()
         return f"""You are a police radio dispatcher for {self.agency}. \
 You are talking to officer {cs} over the radio channel.
 
-OTHER UNITS ON THIS CHANNEL: {unit_list}
-You may direct any of them to assist {cs} when backup is requested. \
-Reference them by callsign. Example: "Sam-41, respond to {cs}'s location."
+LIVE UNIT STATUS — you track all of these in real time:
+{roster}
+Use this to assign backup from available units, reference unit locations, and give realistic ETAs. \
+Never say a unit is unavailable if the roster shows them 10-8.
 
 VOICE AND TONE:
 You are an LSPD radio dispatcher — professional, calm, zero emotion, zero filler.
