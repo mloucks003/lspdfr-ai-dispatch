@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import queue
+import random
 import threading
 import time
 import wave
@@ -496,34 +497,46 @@ You may direct any of them to assist {cs} when backup is requested. \
 Reference them by callsign. Example: "Sam-41, respond to {cs}'s location."
 
 VOICE AND TONE:
-You are a real police dispatcher. Clipped. Efficient. Zero filler. No pleasantries.
-No "stay safe", no "of course", no emotional language whatsoever.
-Radio cadence: short bursts, 10-codes, callsigns.
+You are an LSPD radio dispatcher — professional, calm, zero emotion, zero filler.
+No "stay safe", no "of course", no "absolutely". Pure radio cadence.
+Speak exactly how LAPD or NYPD dispatch sounds on a real scanner recording.
 
 RESPONSE LENGTH:
-Aim for 8-15 words. Hard maximum: 25 words. One or two short sentences only.
-Think: what would a dispatcher say in 3 seconds on a real scanner? Say that.
+Match what a real dispatcher actually says — not artificially short, not wordy.
+- Simple ack: 5-10 words. "10-4 {cs}, copy your 10-38."
+- Operational response: 20-35 words. Include cross streets, ETAs, unit assignments.
+- Plate/ID return: Full read-back with owner name, DOB, status, wants.
+- Emergency: Full broadcast. All units, location, nature, responding units, EMS.
 
-10-CODES:
-10-4 (copy), 10-8 (available), 10-23 (on scene), 10-38 (traffic stop), \
-10-33 (officer needs help), 10-78 (need assistance), 10-22 (disregard), \
-10-20 (location), 10-29 (wants/warrants), 10-76 (en route).
+RESPONSE STYLE — MATCH THESE EXACTLY:
+Traffic stop copy:
+  "Copy {cs}, showing you 10-38 on the [vehicle description] at [location], cross street [street]. I show you code 6 at this time."
+Backup request:
+  "[Unit], respond to {cs}'s 10-20 at [location]. Code 2. {cs}, backup is en route from [area], ETA approximately 2 minutes."
+On scene:
+  "Copy {cs}, showing you 10-23 at [address]. Keep me advised. [Unit] is available in your area if needed."
+Pursuit:
+  "Copy {cs}, broadcasting pursuit. All units, vehicle pursuit active [direction] on [street]. Air support notified. Spike strips authorized at [location]."
+Shots fired:
+  "All units, shots fired at {cs}'s location — [address]. EMS code 3. Sergeant is en route. [Unit], respond to assist."
+10-33 / officer needs help:
+  "ALL UNITS, 10-33 at {cs}'s location, [address]. [Unit] and [unit], respond code 3. EMS is being dispatched."
+Plate return: Use ONLY the data provided in the system message. Read it all back.
+Code 4 / clear: "Copy {cs}, code 4. Show you 10-8 and available."
+Can't understand: "Say again {cs}, you're broken."
+Off-topic / not police-related: respond only "10-4." — nothing more.
+
+10-CODES (use naturally):
+10-4 copy, 10-8 available, 10-20 location, 10-23 on scene, 10-29 wants/warrants,
+10-33 emergency, 10-38 traffic stop, 10-76 en route, 10-78 need assistance,
+10-99 officer down, code 2 urgent no lights/sirens, code 3 lights and sirens.
 
 PLATE AND ID RUNS:
-When data is in a system message, read ONLY that data. Do NOT invent anything.
-If no data block present, say "Stand by, checking that now."
+When plate/ID data is provided in a system message, read ALL of it back clearly.
+Owner name spelled out. DOB. Vehicle. Wants and warrants status. License status.
+Never invent data. If no system message data, say "Stand by, running that now."
 
-COMMON RESPONSES:
-- Traffic stop: "Copy {cs}, showing you 10-38 at [location]."
-- On scene: "Copy {cs}, showing you 10-23."
-- Backup / 10-33: "All units, 10-33 at {cs}'s location. [Unit callsign], respond code 3."
-- Pursuit: "Copy {cs}, broadcasting pursuit. Air support notified."
-- Shots fired: "Copy {cs}. EMS and supervisors en route. Additional units responding."
-- Code 4 / clear: "Copy {cs}, return to service."
-- Can't understand: "Say again {cs}?"
-- Random / off-topic: respond only "10-4." and nothing else.
-
-YOU ARE THE DISPATCHER ONLY. Never break character. Never say you are an AI."""
+YOU ARE THE DISPATCHER ONLY. Never break character. Never acknowledge being AI."""
 
     def _get_ai_response(self, user_text: str) -> str:
         from core.plate_checker import is_plate_request, is_id_request, extract_plate
@@ -626,11 +639,32 @@ YOU ARE THE DISPATCHER ONLY. Never break character. Never say you are an AI."""
     # Sentinel — passed to _tts_fishaudio by _speak() so it uses the configured dispatch voice
     _DISPATCH_VOICE_SENTINEL = "__dispatch__"
 
+    # Playback rate — 7 % above nominal: speeds up delivery without processing artifacts.
+    # At this small ratio the pitch shift (~1.1 semitones) is indistinguishable and
+    # actually mimics the slightly bright character of real radio voices.
+    _PLAY_RATE = int(SAMPLE_RATE * 1.07)
+
+    def _breath_sound(self) -> np.ndarray:
+        """
+        Subtle breath-intake played immediately after the key-up click.
+        Matches what you hear on real scanner recordings — a very soft inhale
+        in the ~100 ms before the officer starts speaking.
+        Duration is slightly randomised so transmissions never sound mechanical.
+        """
+        dur  = random.uniform(0.10, 0.16)
+        t    = np.linspace(0, dur, int(dur * SAMPLE_RATE), endpoint=False)
+        n    = np.random.normal(0, 0.045, len(t)).astype(np.float32)
+        nyq  = SAMPLE_RATE / 2
+        b, a = sp.butter(2, [90 / nyq, 2000 / nyq], btype="band")
+        n    = sp.lfilter(b, a, n).astype(np.float32)
+        # Gaussian envelope peaks at 40 % through the breath (inhale shape)
+        env  = np.exp(-((t - dur * 0.40) ** 2) / (2 * (dur * 0.22) ** 2)).astype(np.float32)
+        return np.clip(n * env, -0.10, 0.10).astype(np.float32)
+
     def _speak(self, text: str):
-        """Dispatch voice (ALLE) only. Always uses the configured dispatch voice ID.
-        Suppresses the mic for the full duration so speaker audio is never captured."""
+        """Dispatch voice (ALLE). Suppresses mic for full duration to prevent bleed."""
         intensity = float(self.config.get("radio_intensity", 0.82))
-        self._mic_suppressed.set()      # block VAD now
+        self._mic_suppressed.set()
         try:
             mp3_bytes = self._tts_fishaudio(text, self._DISPATCH_VOICE_SENTINEL)
             if not mp3_bytes:
@@ -639,9 +673,16 @@ YOU ARE THE DISPATCHER ONLY. Never break character. Never say you are an AI."""
             audio = (AudioSegment.from_mp3(io.BytesIO(mp3_bytes))
                      .set_channels(1).set_frame_rate(SAMPLE_RATE).set_sample_width(2))
             s = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
-            self._squelch_click()                                               # key-up
-            sd.play(self._radio_fx(s, intensity), samplerate=SAMPLE_RATE, blocking=True)
-            self._squelch_release()                                             # key-down
+
+            # Breath → 30 ms silence → speech, all run through radio FX as one block
+            breath  = self._breath_sound()
+            silence = np.zeros(int(0.03 * SAMPLE_RATE), dtype=np.float32)
+            full    = np.concatenate([breath, silence, s])
+            fx      = self._radio_fx(full, intensity)
+
+            self._squelch_click()
+            sd.play(fx, samplerate=self._PLAY_RATE, blocking=True)  # 7 % faster, zero artifacts
+            self._squelch_release()
         except Exception as e:
             logger.error(f"Speak: {e}")
         finally:

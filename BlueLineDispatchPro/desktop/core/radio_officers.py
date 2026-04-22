@@ -228,20 +228,45 @@ class RadioOfficerManager:
         officer["location"] = loc
 
         prompts = {
-            "traffic_stop":  f"Officer {cs} calls dispatch: traffic stop, {veh}, {loc}. 10 words max. Callsign first. 10-codes.",
-            "clear":         f"Officer {cs} calls dispatch: code 4, returning to service, {loc}. 8 words max. Callsign first.",
-            "scene_arrival": f"Officer {cs} calls dispatch: 10-23 at {loc}. 8 words max. Callsign first.",
-            "patrol_obs":    f"Officer {cs} advises dispatch of suspicious {veh} at {loc}. 12 words max. Callsign first.",
-            "request_info":  f"Officer {cs} asks dispatch to run a plate, {veh}, {loc}. 12 words max. Callsign first.",
+            "traffic_stop":  (
+                f"Write ONE police radio transmission: Officer {cs} is showing themselves on a traffic stop. "
+                f"Vehicle: {veh}. Location: {loc}. Include the vehicle color and direction of travel. "
+                f"Request a plate run. 20-30 words. Callsign first. Use 10-codes like 10-38."
+            ),
+            "clear":         (
+                f"Write ONE police radio transmission: Officer {cs} is going code 4 and returning to service from {loc}. "
+                f"Mention what they handled. 15-20 words. Callsign first. Use 10-codes."
+            ),
+            "scene_arrival": (
+                f"Write ONE police radio transmission: Officer {cs} is arriving on scene at {loc}. "
+                f"Describe what they observe — people, vehicles, activity. Request backup if needed. "
+                f"20-28 words. Callsign first. Use 10-23."
+            ),
+            "patrol_obs":    (
+                f"Write ONE police radio transmission: Officer {cs} advises dispatch of a suspicious {veh} at {loc}. "
+                f"Include direction of travel, occupant count, and what made it suspicious. "
+                f"20-30 words. Callsign first."
+            ),
+            "request_info":  (
+                f"Write ONE police radio transmission: Officer {cs} requests a plate/registration run on a {veh} at {loc}. "
+                f"Include a plausible plate number (e.g. 4ABC123) and ask for wants and warrants. "
+                f"20-28 words. Callsign first."
+            ),
         }
         try:
             r = self._openai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "You write ultra-brief police radio transmissions. Raw speech only — no quotes, no narration. 8-12 words maximum. Use 10-codes. Real scanner style. Start with the officer callsign."},
+                    {"role": "system", "content": (
+                        "You write realistic LSPD police radio transmissions that sound exactly like a real scanner. "
+                        "Raw speech only — no quotes, no narration, no stage directions. "
+                        "Use 10-codes naturally. Include specific details: locations, vehicle descriptions, "
+                        "plate numbers, suspect descriptions, directions of travel. "
+                        "Always start with the officer's callsign. Match the length and detail of real dispatch recordings."
+                    )},
                     {"role": "user",   "content": prompts.get(event, prompts["patrol_obs"])},
                 ],
-                max_tokens=40, temperature=0.85,
+                max_tokens=80, temperature=0.88,
             )
             return r.choices[0].message.content.strip().strip('"').strip("'")
         except Exception as e:
@@ -253,10 +278,17 @@ class RadioOfficerManager:
             r = self._openai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": f"You are officer {cs}. Reply to {self.player_callsign} on radio. 10 words max. Real scanner style. 10-codes. No filler. Callsign first."},
+                    {"role": "system", "content": (
+                        f"You are LSPD officer {cs} on a radio channel. "
+                        f"Reply to {self.player_callsign}'s transmission. "
+                        "Respond like a real officer on a scanner — include your current location, "
+                        "what you're doing, your ETA if relevant, and any tactical details. "
+                        "Use 10-codes naturally. 15-25 words. Start with your callsign. "
+                        "No filler. No pleasantries. Raw radio speech only."
+                    )},
                     {"role": "user",   "content": f"{self.player_callsign}: '{player_text}'"},
                 ],
-                max_tokens=40, temperature=0.78,
+                max_tokens=70, temperature=0.78,
             )
             return r.choices[0].message.content.strip().strip('"').strip("'")
         except Exception as e:
@@ -337,12 +369,31 @@ class RadioOfficerManager:
         except Exception:
             pass
 
+    # 7 % faster playback — same trick as dispatch: no processing artifacts,
+    # natural scanner pace without pitch-smearing time-stretch algorithms.
+    _PLAY_RATE = int(22050 * 1.07)
+
+    def _officer_breath(self) -> np.ndarray:
+        """
+        Subtle breath-intake played immediately after key-up, before speech.
+        Identical logic to the dispatcher breath but called on a per-officer basis
+        so each transmission has a slightly different duration (100-160 ms).
+        """
+        dur  = random.uniform(0.10, 0.16)
+        t    = np.linspace(0, dur, int(dur * self.SAMPLE_RATE), endpoint=False)
+        n    = np.random.normal(0, 0.045, len(t)).astype(np.float32)
+        from scipy import signal as _sp
+        nyq  = self.SAMPLE_RATE / 2
+        b, a = _sp.butter(2, [90 / nyq, 2000 / nyq], btype="band")
+        n    = _sp.lfilter(b, a, n).astype(np.float32)
+        env  = np.exp(-((t - dur * 0.40) ** 2) / (2 * (dur * 0.22) ** 2)).astype(np.float32)
+        return np.clip(n * env, -0.10, 0.10).astype(np.float32)
+
     def _speak_as_officer(self, officer: dict, text: str):
         import io
         import sounddevice as sd
         from scipy import signal as sp_sig
         cs = officer["callsign"]
-        # Suppress dispatcher mic so the officer audio is never captured by VAD
         if self.mic_suppressed is not None:
             self.mic_suppressed.set()
         try:
@@ -356,19 +407,20 @@ class RadioOfficerManager:
                      .set_sample_width(2))
             s = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
 
-            # ── Pitch shift FIRST on clean audio, then radio FX ───────────────
-            # Applying pitch shift before the bandpass preserves voice character.
-            # Resampling changes duration slightly — that's fine; real radio
-            # transmissions vary in pacing and it adds to the natural feel.
+            # ── Pitch shift on clean audio BEFORE radio FX ────────────────────
             factor = float(officer.get("pitch", _OFFICER_PITCH.get(cs, 1.0)))
             if abs(factor - 1.0) > 0.01:
                 target_len = int(len(s) * factor)
                 s = sp_sig.resample(s, target_len).astype(np.float32)
 
-            fx = self._radio_fx(s, float(self._config.get("radio_intensity", 0.82)))
+            # ── Breath → 30 ms gap → speech, all through radio FX ─────────────
+            breath  = self._officer_breath()
+            silence = np.zeros(int(0.03 * self.SAMPLE_RATE), dtype=np.float32)
+            full    = np.concatenate([breath, silence, s])
+            fx      = self._radio_fx(full, float(self._config.get("radio_intensity", 0.82)))
 
             self._officer_squelch(cs, release=False)                  # key-up
-            sd.play(fx, samplerate=self.SAMPLE_RATE, blocking=True)
+            sd.play(fx, samplerate=self._PLAY_RATE, blocking=True)    # 7 % faster
             self._officer_squelch(cs, release=True)                   # key-down
         except Exception as e:
             logger.error(f"Officer speak: {e}")
