@@ -496,11 +496,13 @@ You may direct any of them to assist {cs} when backup is requested. \
 Reference them by callsign. Example: "Sam-41, respond to {cs}'s location."
 
 VOICE AND TONE:
-Calm, clipped, professional. Real dispatchers are efficient and precise. \
-No "stay safe", no warm language, no emotional filler. Short sentences. Radio cadence.
+You are a real police dispatcher. Clipped. Efficient. Zero filler. No pleasantries.
+No "stay safe", no "of course", no emotional language whatsoever.
+Radio cadence: short bursts, 10-codes, callsigns.
 
 RESPONSE LENGTH:
-1 to 2 sentences maximum. Under 20 words preferred. Never more than 35 words.
+Aim for 8-15 words. Hard maximum: 25 words. One or two short sentences only.
+Think: what would a dispatcher say in 3 seconds on a real scanner? Say that.
 
 10-CODES:
 10-4 (copy), 10-8 (available), 10-23 (on scene), 10-38 (traffic stop), \
@@ -634,12 +636,8 @@ YOU ARE THE DISPATCHER ONLY. Never break character. Never say you are an AI."""
             if not mp3_bytes:
                 return
             from pydub import AudioSegment
-            from pydub.effects import speedup as _speedup
             audio = (AudioSegment.from_mp3(io.BytesIO(mp3_bytes))
                      .set_channels(1).set_frame_rate(SAMPLE_RATE).set_sample_width(2))
-            spd = float(self.config.get("tts_speed", 1.20))
-            if spd != 1.0:
-                audio = _speedup(audio, playback_speed=spd, chunk_size=150, crossfade=20)
             s = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
             self._squelch_click()                                               # key-up
             sd.play(self._radio_fx(s, intensity), samplerate=SAMPLE_RATE, blocking=True)
@@ -700,21 +698,41 @@ YOU ARE THE DISPATCHER ONLY. Never break character. Never say you are an AI."""
         except Exception as e:
             logger.error(f"ElevenLabs TTS: {e}"); return None
 
-    def _radio_fx(self, samples: np.ndarray, intensity: float) -> np.ndarray:
-        """Bandpass filter + soft clip distortion + static noise."""
+    def _radio_fx(self, samples: np.ndarray, intensity: float = 0.82) -> np.ndarray:
+        """
+        Police radio audio chain — matches the real thing:
+          1. Pre-emphasis  — subtle high-freq boost (radio clarity / presence)
+          2. Bandpass      — 300-3400 Hz voice band, 6th-order steep rolloff
+          3. AGC           — normalise to consistent level before saturation
+          4. Warm sat.     — tanh soft saturation (not harsh clipping)
+          5. Noise floor   — low-level radio hiss under the voice
+        """
         if intensity <= 0:
             return samples
+        s = samples.astype(np.float64)
         nyq = SAMPLE_RATE / 2
-        b, a = sp.butter(4, [300 / nyq, 3400 / nyq], btype="band")
-        samples = sp.lfilter(b, a, samples)
-        thresh = 0.55
-        samples = np.where(
-            np.abs(samples) > thresh,
-            np.sign(samples) * (thresh + (np.abs(samples) - thresh) * 0.25),
-            samples,
-        )
-        samples += np.random.normal(0, 0.005 * intensity, len(samples))
-        return np.clip(samples, -1.0, 1.0).astype(np.float32)
+
+        # 1. Pre-emphasis: first-order high-shelf boost for radio presence
+        #    Equivalent to a 6 dB/oct rise above ~1 kHz, then filtered back
+        b_pre = np.array([1.0, -0.82])
+        s = sp.lfilter(b_pre, [1.0], s)
+
+        # 2. Bandpass — 6th-order Butterworth, steep skirts like a real radio
+        b, a = sp.butter(6, [290 / nyq, 3500 / nyq], btype="band")
+        s = sp.lfilter(b, a, s)
+
+        # 3. AGC — normalize to 85 % headroom before saturation
+        peak = np.max(np.abs(s)) + 1e-9
+        s = s / peak * 0.85
+
+        # 4. Warm tanh saturation — models the analogue compression of a radio
+        drive = 2.8
+        s = np.tanh(s * drive) / np.tanh(np.array([drive]))[0] * 0.82
+
+        # 5. Low-level noise floor (radio hiss) — scales with intensity slider
+        s += np.random.normal(0, 0.007 * intensity, len(s))
+
+        return np.clip(s, -1.0, 1.0).astype(np.float32)
 
     # ── State ─────────────────────────────────────────────────────────────────
 

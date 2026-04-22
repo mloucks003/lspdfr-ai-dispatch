@@ -228,20 +228,20 @@ class RadioOfficerManager:
         officer["location"] = loc
 
         prompts = {
-            "traffic_stop":  f"ONE radio transmission: officer {cs} calls dispatch showing them on a traffic stop of a {veh} at {loc}. Under 20 words. Start with callsign.",
-            "clear":         f"ONE radio transmission: officer {cs} calls dispatch to say code 4 and returning to service from {loc}. Under 15 words. Start with callsign.",
-            "scene_arrival": f"ONE radio transmission: officer {cs} calls dispatch saying 10-23 at {loc}. Under 15 words. Start with callsign.",
-            "patrol_obs":    f"ONE radio transmission: officer {cs} notes a suspicious {veh} at {loc}. Under 20 words. Start with callsign.",
-            "request_info":  f"ONE radio transmission: officer {cs} asks dispatch to run a plate on a {veh} at {loc}. Under 20 words. Start with callsign.",
+            "traffic_stop":  f"Officer {cs} calls dispatch: traffic stop, {veh}, {loc}. 10 words max. Callsign first. 10-codes.",
+            "clear":         f"Officer {cs} calls dispatch: code 4, returning to service, {loc}. 8 words max. Callsign first.",
+            "scene_arrival": f"Officer {cs} calls dispatch: 10-23 at {loc}. 8 words max. Callsign first.",
+            "patrol_obs":    f"Officer {cs} advises dispatch of suspicious {veh} at {loc}. 12 words max. Callsign first.",
+            "request_info":  f"Officer {cs} asks dispatch to run a plate, {veh}, {loc}. 12 words max. Callsign first.",
         }
         try:
             r = self._openai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "Write realistic, brief police radio speech. No quotes or narration. Raw radio text only. Always start with the officer callsign."},
+                    {"role": "system", "content": "You write ultra-brief police radio transmissions. Raw speech only — no quotes, no narration. 8-12 words maximum. Use 10-codes. Real scanner style. Start with the officer callsign."},
                     {"role": "user",   "content": prompts.get(event, prompts["patrol_obs"])},
                 ],
-                max_tokens=60, temperature=0.88,
+                max_tokens=40, temperature=0.85,
             )
             return r.choices[0].message.content.strip().strip('"').strip("'")
         except Exception as e:
@@ -253,10 +253,10 @@ class RadioOfficerManager:
             r = self._openai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": f"You are police officer {cs}. Reply to a radio transmission from {self.player_callsign}. 1-2 sentences, under 25 words, 10-codes, police radio style. Start with your callsign on first contact."},
-                    {"role": "user",   "content": f"{self.player_callsign} just said: '{player_text}'"},
+                    {"role": "system", "content": f"You are officer {cs}. Reply to {self.player_callsign} on radio. 10 words max. Real scanner style. 10-codes. No filler. Callsign first."},
+                    {"role": "user",   "content": f"{self.player_callsign}: '{player_text}'"},
                 ],
-                max_tokens=80, temperature=0.78,
+                max_tokens=40, temperature=0.78,
             )
             return r.choices[0].message.content.strip().strip('"').strip("'")
         except Exception as e:
@@ -350,22 +350,22 @@ class RadioOfficerManager:
             if not mp3:
                 return
             from pydub import AudioSegment
-            from pydub.effects import speedup as _speedup
             audio = (AudioSegment.from_mp3(io.BytesIO(mp3))
                      .set_channels(1)
                      .set_frame_rate(self.SAMPLE_RATE)
                      .set_sample_width(2))
-            spd = float(self._config.get("tts_speed", 1.20))
-            if spd != 1.0:
-                audio = _speedup(audio, playback_speed=spd, chunk_size=150, crossfade=20)
-            s  = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
-            fx = self._radio_fx(s, float(self._config.get("radio_intensity", 0.82)))
+            s = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
 
-            # ── Pitch shift: resample to change perceived vocal pitch ──────────
+            # ── Pitch shift FIRST on clean audio, then radio FX ───────────────
+            # Applying pitch shift before the bandpass preserves voice character.
+            # Resampling changes duration slightly — that's fine; real radio
+            # transmissions vary in pacing and it adds to the natural feel.
             factor = float(officer.get("pitch", _OFFICER_PITCH.get(cs, 1.0)))
             if abs(factor - 1.0) > 0.01:
-                target_len = int(len(fx) * factor)
-                fx = sp_sig.resample(fx, target_len).astype(np.float32)
+                target_len = int(len(s) * factor)
+                s = sp_sig.resample(s, target_len).astype(np.float32)
+
+            fx = self._radio_fx(s, float(self._config.get("radio_intensity", 0.82)))
 
             self._officer_squelch(cs, release=False)                  # key-up
             sd.play(fx, samplerate=self.SAMPLE_RATE, blocking=True)
