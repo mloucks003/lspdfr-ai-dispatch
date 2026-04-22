@@ -716,7 +716,8 @@ class AIDispatcher:
             return client.tts.convert(
                 text=text,
                 reference_id=ref_id,
-                latency="balanced",
+                latency="normal",
+                backend="s2-pro",
                 format="mp3",
             )
         except Exception as e:

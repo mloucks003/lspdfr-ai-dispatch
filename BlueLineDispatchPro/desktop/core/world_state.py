@@ -9,6 +9,7 @@ The data model here does NOT change — only the transport layer is added.
 """
 
 import threading
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -24,13 +25,33 @@ class UnitStatus(str, Enum):
 
 
 @dataclass
+class EmotionalState:
+    """
+    Live emotional snapshot for one officer.
+    Feeds into GPT system prompts AND ElevenLabs voice settings so the
+    language model and the voice model agree on how the officer feels.
+
+    arousal     — 0.0 = calm/bored → 1.0 = full adrenaline (pursuit, shots)
+    frustration — 0.0 = fine       → 1.0 = fed up (long domestic, bad subject)
+    fatigue     — accumulates over shift; decays very slowly
+    mood        — coarse label consumed by the GPT prompt builder
+    """
+    arousal:     float = 0.0
+    frustration: float = 0.0
+    fatigue:     float = 0.0
+    mood:        str   = "neutral"
+    # Valid moods: neutral, focused, tense, wired, relieved, frustrated, bored, tired
+
+
+@dataclass
 class Unit:
     callsign:  str
     name:      str
-    status:    UnitStatus   = UnitStatus.AVAILABLE
-    location:  str          = "Patrol"
+    status:    UnitStatus    = UnitStatus.AVAILABLE
+    location:  str           = "Patrol"
     incident:  Optional[str] = None
     is_player: bool          = False
+    emotion:   EmotionalState = field(default_factory=EmotionalState)
 
     def brief(self) -> str:
         """
@@ -57,9 +78,26 @@ class WorldState:
         prompt += world_state.roster_for_prompt()
     """
 
+    # Emotion trigger → field deltas.  "mood" is set directly; numerics are clamped [0,1].
+    _EMOTION_TRIGGERS: dict[str, dict] = {
+        "pursuit_start":      {"arousal": +0.90, "mood": "wired"},
+        "shots_fired":        {"arousal": +1.00, "mood": "tense"},
+        "robbery":            {"arousal": +0.75, "mood": "tense"},
+        "backup_requested":   {"arousal": +0.50, "mood": "focused"},
+        "domestic_prolonged": {"frustration": +0.40, "mood": "frustrated"},
+        "welfare_bad":        {"arousal": +0.35, "mood": "tense"},
+        "clear_tense":        {"arousal": -0.60, "mood": "relieved"},
+        "clear_routine":      {"arousal": -0.10, "fatigue": +0.05},
+        "routine_stop":       {"arousal": -0.05, "mood": "bored"},
+        "long_wait":          {"fatigue": +0.10, "mood": "tired"},
+    }
+
     def __init__(self):
         self._lock  = threading.RLock()
         self._units: dict[str, Unit] = {}
+        # Arousal decay: every 3 minutes, arousal drops 0.15 naturally
+        t = threading.Thread(target=self._decay_loop, daemon=True, name="emotion_decay")
+        t.start()
 
     def register(self, callsign: str, name: str,
                  location: str = "Patrol", is_player: bool = False):
@@ -100,6 +138,73 @@ class WorldState:
             if not self._units:
                 return "  (no units registered)"
             return "\n".join(f"  {u.brief()}" for u in self._units.values())
+
+    def update_emotion(self, callsign: str, trigger: str):
+        """
+        Apply an event trigger to one officer's emotional state.
+        Numeric fields are clamped to [0.0, 1.0].
+        Mood field is set directly.
+
+        Example:
+            world_state.update_emotion("King-3", "pursuit_start")
+            # → arousal += 0.9, mood = "wired"
+        """
+        delta = self._EMOTION_TRIGGERS.get(trigger, {})
+        if not delta:
+            return
+        with self._lock:
+            u = self._units.get(callsign)
+            if not u or u.is_player:
+                return
+            e = u.emotion
+            for k, v in delta.items():
+                if k == "mood":
+                    e.mood = v
+                else:
+                    current = getattr(e, k, 0.0)
+                    setattr(e, k, max(0.0, min(1.0, current + v)))
+
+    def _decay_loop(self):
+        """
+        Background thread: adrenaline fades naturally over time.
+        Every 3 minutes, arousal drops 0.15 for every officer.
+        Fatigue decays very slowly (0.02 per 10 min) — simulates a long shift
+        but won't fully reset during a session.
+        """
+        while True:
+            time.sleep(180)   # 3-minute tick
+            with self._lock:
+                for u in self._units.values():
+                    if u.is_player:
+                        continue
+                    e = u.emotion
+                    e.arousal = max(0.0, e.arousal - 0.15)
+                    # Fatigue decays once every 10 minutes (every ~3.3 ticks)
+                    e.fatigue = max(0.0, e.fatigue - 0.02)
+                    # If arousal and frustration both drop low, drift back to neutral
+                    if e.arousal < 0.15 and e.frustration < 0.15 and e.mood not in ("bored", "tired", "neutral"):
+                        e.mood = "neutral"
+
+    def snapshot(self) -> dict:
+        """
+        Return a lightweight dict snapshot of the world — safe to read outside the lock.
+        Used by radio_officers._build_officer_system_prompt to get the active incident list.
+        """
+        with self._lock:
+            incidents = []
+            for cs, u in self._units.items():
+                if u.incident and not u.is_player:
+                    # incident strings are stored as "<type> at <location>"
+                    if " at " in u.incident:
+                        inc_type, inc_loc = u.incident.split(" at ", 1)
+                    else:
+                        inc_type, inc_loc = u.incident, u.location
+                    incidents.append({
+                        "assigned_to": cs,
+                        "type": inc_type,
+                        "location": inc_loc,
+                    })
+            return {"active_incidents": incidents}
 
     def available_units(self, exclude: str = "") -> list[str]:
         """Return callsigns of units that are 10-8 (available), excluding `exclude`."""

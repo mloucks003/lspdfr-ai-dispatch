@@ -67,6 +67,45 @@ def _clean_response(text: str, callsign: str) -> str:
     text = text.strip('"\'').strip('\u201c\u201d\u2018\u2019')
     return text.strip()
 
+
+def _apply_speech_tags(text: str, emotion) -> str:
+    """
+    Prepend Fish Audio S2 Pro inline emotion tags based on the officer's
+    live emotional state.  These are interpreted by the model as delivery
+    cues — they are NOT spoken aloud as words.
+
+    Applied to every officer transmission before TTS so scripted behavior-loop
+    lines (arrivals, plate requests, clears) get the same treatment as
+    GPT-generated responses.
+
+    Dispatch never goes through this function.
+    """
+    if emotion is None:
+        return text
+    # Don't double-tag if GPT already added a bracket prefix
+    if text.startswith("["):
+        return text
+
+    if emotion.arousal > 0.8:
+        # Hot — pursuit, shots fired.  Fast delivery, slightly breathless.
+        return f"[urgent] {text}"
+    if emotion.mood == "tense":
+        # Something feels wrong.  Voice is quieter, deliberate.
+        return f"[tense] {text}"
+    if emotion.mood == "relieved":
+        # Just cleared something heavy.  Audible exhale before speaking.
+        return f"[exhales] {text}"
+    if emotion.frustration > 0.6:
+        # Worn down.  Quiet sigh, clipped delivery.
+        return f"[sighs] {text}"
+    if emotion.mood in ("tired", "bored"):
+        # Late shift, slow night.  Flat, lower energy.
+        return f"[flat] {text}"
+    if emotion.arousal > 0.5:
+        # Alert, locked in.  Sharp, direct.
+        return f"[focused] {text}"
+    return text
+
 # ── GTA V / Los Santos locations ─────────────────────────────────────────────
 _LOCATIONS = [
     "Strawberry Avenue", "Forum Drive", "Elgin Avenue", "Adam Avenue",
@@ -477,51 +516,109 @@ class RadioOfficerManager:
         except Exception as e:
             logger.error(f"GPT chatter: {e}"); return ""
 
+    def _build_officer_system_prompt(self, officer: dict) -> str:
+        """
+        Emotion-aware system prompt injected into every officer GPT call.
+        The emotional direction section is visceral and specific so GPT actually
+        changes word choice and sentence length — not just tone.
+        """
+        cs      = officer["callsign"]
+        persona = officer.get("persona", {})
+        name    = persona.get("full_name", f"Officer {persona.get('name', cs)}")
+        years   = persona.get("years_on_job", 5)
+        quirks  = persona.get("quirks", [])
+
+        # Pull live emotion from world state
+        unit    = world_state.get(cs)
+        e       = unit.emotion if unit else None
+
+        if e is None or (e.arousal < 0.1 and e.frustration < 0.1 and e.mood == "neutral"):
+            emotional = "Standard professional demeanor. Calm, controlled, routine."
+        elif e.arousal > 0.8:
+            emotional = (
+                "YOU ARE RUNNING HOT. Adrenaline is real right now. "
+                "Transmissions are SHORT and FAST — you may cut your own sentence to get "
+                "critical info out first. Do NOT sound calm. Sound like someone in the middle of it. "
+                "Urgency bleeds through even when you try to stay professional."
+            )
+        elif e.arousal > 0.5:
+            emotional = (
+                "You are alert and locked in. Not panicked — but definitely not relaxed. "
+                "Every word is deliberate. No filler. Tight transmissions. Something is actively happening."
+            )
+        elif e.frustration > 0.6:
+            emotional = (
+                f"You are frustrated and worn down. {years} years on the job and here you are again. "
+                "You are staying professional — that's who you are — but patience is GONE. "
+                "Responses are clipped. Nothing extra. Done."
+            )
+        elif e.mood == "relieved":
+            emotional = (
+                "You just cleared something heavy. The tension is leaving your body. "
+                "Brief. Slightly warmer than usual. One exhale worth of relief in your voice."
+            )
+        elif e.mood in ("tired", "bored"):
+            emotional = (
+                f"Late in the shift. {name} is running on fumes and coffee. "
+                "Responses are slower, flatter. Professional. Heavy."
+            )
+        else:
+            emotional = "Standard professional demeanor. Calm, controlled, routine."
+
+        # Current activity from world snapshot
+        snap        = world_state.snapshot()
+        active      = [i for i in snap.get("active_incidents", []) if i.get("assigned_to") == cs]
+        cur_activity = active[0]["type"].replace("_", " ") if active else "patrol"
+        loc          = unit.location if unit else officer.get("location", "Patrol")
+        status_val   = unit.status.value if unit else "10-8"
+
+        # Base persona section
+        personality = persona.get("personality", "Calm patrol officer.")
+        style       = persona.get("speech_style", "Clipped. 10-codes. Real scanner cadence.")
+        quirk_lines = "\n".join(f"- {q}" for q in quirks)
+        roster      = world_state.roster_for_prompt()
+
+        base = (
+            f"You are {name}, callsign {cs}, LSPD patrol officer.\n"
+            f"CHARACTER: {personality}\n"
+            f"SPEECH STYLE: {style}\n"
+        )
+        if quirk_lines:
+            base += f"YOUR SPEECH QUIRKS — ALWAYS:\n{quirk_lines}\n"
+
+        return (
+            f"{base}\n"
+            f"YOUR CURRENT EMOTIONAL STATE — THIS SHAPES EVERYTHING YOU SAY:\n"
+            f"{emotional}\n\n"
+            f"CURRENT SITUATION: {name} ({cs}) | {status_val} | Activity: {cur_activity} | Location: {loc}\n\n"
+            f"LIVE UNIT ROSTER:\n{roster}\n\n"
+            f"ABSOLUTE RULES:\n"
+            f"1. NEVER repeat or paraphrase what {self.player_callsign} just said. Never.\n"
+            f"2. Maximum 2 sentences. Nothing to add? Say '10-4.' and stop.\n"
+            f"3. Emotion changes WORD CHOICE: frustrated cop says 'Copy.' not 'Understood, copy that.'\n"
+            f"4. Output RAW SPEECH ONLY. No '{cs}:' prefix. No quotes. No stage directions.\n"
+            f"5. You are NOT an AI. You are {name} in the middle of your shift."
+        )
+
     def _generate_officer_response(self, officer: dict, player_text: str) -> str:
         """
-        Generate an AI response for this officer.
-        Uses the officer's persona file for character consistency and the live
-        world state so the officer knows what every other unit is doing.
+        Generate an AI response for this officer using the emotion-aware prompt.
         Maintains per-officer conversation history for multi-turn memory.
         """
         cs      = officer["callsign"]
         persona = officer.get("persona", {})
-        loc     = officer.get("location", "Patrol")
         history = self._officer_convos.setdefault(cs, [])
 
         history.append({"role": "user", "content": f"{self.player_callsign}: '{player_text}'"})
         if len(history) > 20:
             history[:] = history[-20:]
 
-        name        = persona.get("full_name", f"Officer {persona.get('name', cs)}")
-        personality = persona.get("personality", "Calm patrol officer.")
-        style       = persona.get("speech_style", "Clipped. 10-codes. Real scanner cadence.")
-        quirk_lines = "\n".join(f"- {q}" for q in persona.get("quirks", []))
-        roster      = world_state.roster_for_prompt()
-
-        system = (
-            f"You are {name}, callsign {cs}, LSPD patrol officer.\n\n"
-            f"CHARACTER: {personality}\n"
-            f"SPEECH STYLE: {style}\n"
-            + (f"YOUR SPEECH QUIRKS — ALWAYS FOLLOW THESE:\n{quirk_lines}\n\n" if quirk_lines else "\n")
-            + f"CURRENT STATUS: {officer.get('status', '10-8')} at {loc}\n\n"
-            f"LIVE UNIT ROSTER:\n{roster}\n\n"
-            f"RULES — READ EVERY ONE:\n"
-            f"- You are talking directly to {self.player_callsign} on a shared radio channel.\n"
-            f"- Output RAW SPEECH ONLY. No callsign prefix like '{cs}:'. No quotes. No stage directions.\n"
-            f"- Do NOT start with '{cs}:' or '{cs},' — just speak the words.\n"
-            f"- NEVER repeat or paraphrase what {self.player_callsign} just said.\n"
-            f"- NEVER acknowledge by restating their transmission ('Copy, you said X...').\n"
-            f"- Respond with NEW information only: your status, location, ETA, a question, or a short ack.\n"
-            f"- If you have nothing to add: say 'Copy.' or '10-4.' and STOP. Do not pad.\n"
-            f"- 1-2 sentences maximum. Hard limit.\n"
-            f"- Use 10-codes naturally. Stay in persona at all times."
-        )
+        system = self._build_officer_system_prompt(officer)
         try:
             r = self._openai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "system", "content": system}] + history,
-                max_tokens=90, temperature=0.82,
+                max_tokens=90, temperature=0.88,
             )
             raw   = r.choices[0].message.content
             reply = _clean_response(raw, cs)
@@ -586,9 +683,18 @@ class RadioOfficerManager:
         Play officer TTS through radio FX.
         PTT open + voice + tail tone concatenated into ONE buffer so playback
         is gapless and all audio goes through the same radio FX chain.
+
+        Emotion tags (e.g. "[urgent]", "[exhales]") are prepended here so that
+        EVERY transmission — scripted behavior-loop lines AND GPT responses —
+        gets Fish Audio S2 Pro delivery cues matched to the officer's live state.
         """
         import io
         import sounddevice as sd
+        # Apply Fish Audio S2 Pro emotion delivery tag based on live emotional state
+        cs   = officer["callsign"]
+        unit = world_state.get(cs)
+        text = _apply_speech_tags(text, unit.emotion if unit else None)
+
         if self.mic_suppressed is not None:
             self.mic_suppressed.set()
         try:

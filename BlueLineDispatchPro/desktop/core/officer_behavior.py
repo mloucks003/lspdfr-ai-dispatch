@@ -97,6 +97,9 @@ class OfficerBehaviorLoop:
         logger.info(f"[{officer['callsign']}] (behavior): {text!r}")
         self._officer_speak(officer, text)
 
+    # ── Tense call types that warrant "clear_tense" on completion ────────────────
+    _TENSE_TYPES = {"pursuit", "robbery", "burglary", "welfare_check", "disturbance"}
+
     def _traffic_stop(self, officer: dict, incident: dict):
         unit  = officer["callsign"]
         loc   = incident["location"]
@@ -114,13 +117,15 @@ class OfficerBehaviorLoop:
             owner = f"{random.choice(_FIRST)} {random.choice(_LAST)}"
             year  = str(random.randint(2004, 2023))
             make  = random.choice(_MAKES)
-            r     = random.random()
-            if r < 0.80:
+            r_val = random.random()
+            if r_val < 0.80:
                 warrant = "Returns negative, no wants or warrants."
-            elif r < 0.95:
+            elif r_val < 0.95:
                 warrant = "Returns with a misdemeanor warrant. Use caution."
+                world_state.update_emotion(unit, "backup_requested")
             else:
                 warrant = "RETURNS WITH AN ACTIVE FELONY WARRANT. Use extreme caution."
+                world_state.update_emotion(unit, "robbery")   # spikes adrenaline
             self._dispatch(
                 f"{unit}, 10-29 return on plate {plate} — registered to {owner}, "
                 f"{year} {make}. {warrant}"
@@ -129,6 +134,7 @@ class OfficerBehaviorLoop:
             self._pause_sleep(random.uniform(90, 300))
             clear = random.choice(_CLEAR.get("traffic_stop", ["{unit}, 10-98. 10-8."]))
             self._tx(officer, clear.format(unit=unit, location=loc))
+            world_state.update_emotion(unit, "clear_routine")
             world_state.update(unit, status=UnitStatus.AVAILABLE, incident=None)
         except Exception as e:
             logger.error(f"traffic_stop lifecycle {unit}: {e}")
@@ -138,6 +144,7 @@ class OfficerBehaviorLoop:
         unit      = officer["callsign"]
         call_type = incident["type"]
         loc       = incident["location"]
+        is_tense  = call_type in self._TENSE_TYPES
         try:
             self._pause_sleep(random.uniform(60, 180))
             world_state.update(unit, status=UnitStatus.ON_SCENE,
@@ -146,12 +153,17 @@ class OfficerBehaviorLoop:
             call_dur = random.uniform(120, 400)
             if call_dur > 240:
                 self._pause_sleep(call_dur * 0.5)
+                # Long domestics build frustration
+                if call_type == "disturbance":
+                    world_state.update_emotion(unit, "domestic_prolonged")
                 self._tx(officer, f"{unit}, still 10-6 at {loc}.")
                 self._pause_sleep(call_dur * 0.5)
             else:
                 self._pause_sleep(call_dur)
             clear = random.choice(_CLEAR.get(call_type, ["{unit}, 10-98. 10-8."]))
             self._tx(officer, clear.format(unit=unit, location=loc))
+            # Emotion on clear: tense calls get relief; routine ones add fatigue
+            world_state.update_emotion(unit, "clear_tense" if is_tense else "clear_routine")
             world_state.update(unit, status=UnitStatus.AVAILABLE, incident=None)
         except Exception as e:
             logger.error(f"generic lifecycle {unit}: {e}")
@@ -160,6 +172,7 @@ class OfficerBehaviorLoop:
     def _pursuit(self, officer: dict, incident: dict):
         unit = officer["callsign"]
         try:
+            world_state.update_emotion(unit, "pursuit_start")   # spike adrenaline immediately
             world_state.update(unit, status=UnitStatus.ON_CALL,
                                incident=f"pursuit on {incident['location']}")
             updates = random.sample(_PURSUIT_LINES, min(4, len(_PURSUIT_LINES)))
@@ -176,6 +189,7 @@ class OfficerBehaviorLoop:
             else:
                 end = f"{unit}, pursuit terminated — lost sight near {random.choice(_STREETS)}. 10-8."
             self._tx(officer, end)
+            world_state.update_emotion(unit, "clear_tense")   # relief after pursuit ends
             world_state.update(unit, status=UnitStatus.AVAILABLE, incident=None)
         except Exception as e:
             logger.error(f"pursuit lifecycle {unit}: {e}")

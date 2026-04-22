@@ -162,6 +162,20 @@ class IncidentEngine:
         world_state.update(unit, status=UnitStatus.ENROUTE,
                            incident=f"{call_type} at {incident['location']}")
 
+        # Set emotional state immediately so the officer's en-route voice sounds right
+        _EMOTION_MAP = {
+            "pursuit":          "pursuit_start",
+            "robbery":          "robbery",
+            "burglary":         "backup_requested",
+            "disturbance":      "backup_requested",
+            "welfare_check":    "welfare_bad",
+            "traffic_stop":     "routine_stop",
+            "suspicious":       "routine_stop",
+            "traffic_accident": "backup_requested",
+        }
+        trigger = _EMOTION_MAP.get(call_type, "routine_stop")
+        world_state.update_emotion(unit, trigger)
+
         self._dispatch_cb(text)
 
         def _delayed():
