@@ -583,19 +583,43 @@ YOU ARE THE DISPATCHER ONLY. Never break character. Never say you are an AI."""
 
     # ── TTS + Radio FX ────────────────────────────────────────────────────────
 
-    def _squelch_click(self):
-        """Play a brief radio squelch/key click before transmissions."""
+    def _radio_click(self, release: bool = False):
+        """
+        Generate and play a realistic PTT click.
+        key-up  (release=False): sharper, brighter — sounds like button press
+        key-down (release=True): slightly lower, slower decay — button release
+        """
         try:
-            dur = 0.07   # seconds
-            t   = np.linspace(0, dur, int(dur * SAMPLE_RATE), endpoint=False)
-            n   = np.random.normal(0, 0.25, len(t)).astype(np.float32)
-            nyq = SAMPLE_RATE / 2
-            b, a = sp.butter(4, [500 / nyq, 2800 / nyq], btype="band")
-            n = sp.lfilter(b, a, n).astype(np.float32)
-            n *= np.exp(-t * 35).astype(np.float32)   # fast decay
-            sd.play(np.clip(n, -0.4, 0.4), samplerate=SAMPLE_RATE, blocking=True)
+            dur  = 0.11 if not release else 0.09
+            t    = np.linspace(0, dur, int(dur * SAMPLE_RATE), endpoint=False)
+            nyq  = SAMPLE_RATE / 2
+
+            # Main click body — bandpass filtered noise burst
+            noise = np.random.normal(0, 0.5, len(t)).astype(np.float32)
+            lo = 380 / nyq;  hi = 3400 / nyq
+            b, a = sp.butter(4, [lo, hi], btype="band")
+            noise = sp.lfilter(b, a, noise).astype(np.float32)
+
+            # Envelope: instant attack, exponential decay
+            decay = 45 if not release else 28
+            env   = np.exp(-t * decay).astype(np.float32)
+            click = noise * env
+
+            # Dispatch console has a slight low-mid character (~520 Hz)
+            tone = np.sin(2 * np.pi * 520 * t).astype(np.float32) * env * 0.30
+            click = np.clip((click + tone) * 0.72, -0.85, 0.85).astype(np.float32)
+
+            sd.play(click, samplerate=SAMPLE_RATE, blocking=True)
         except Exception:
             pass
+
+    def _squelch_click(self):
+        """Dispatch key-up click (called before speech)."""
+        self._radio_click(release=False)
+
+    def _squelch_release(self):
+        """Dispatch key-down click (called after speech ends)."""
+        self._radio_click(release=True)
 
     # Sentinel — passed to _tts_fishaudio by _speak() so it uses the configured dispatch voice
     _DISPATCH_VOICE_SENTINEL = "__dispatch__"
@@ -613,14 +637,15 @@ YOU ARE THE DISPATCHER ONLY. Never break character. Never say you are an AI."""
             audio = (AudioSegment.from_mp3(io.BytesIO(mp3_bytes))
                      .set_channels(1).set_frame_rate(SAMPLE_RATE).set_sample_width(2))
             s = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
-            self._squelch_click()
+            self._squelch_click()                                               # key-up
             sd.play(self._radio_fx(s, intensity), samplerate=SAMPLE_RATE, blocking=True)
+            self._squelch_release()                                             # key-down
         except Exception as e:
             logger.error(f"Speak: {e}")
         finally:
-            time.sleep(0.50)            # tail delay: let speaker reverb die
-            self._flush_queue()         # discard any bleed that made it into the queue
-            self._mic_suppressed.clear()  # re-enable VAD
+            time.sleep(0.45)
+            self._flush_queue()
+            self._mic_suppressed.clear()
 
     def _tts_with_voice(self, text: str, voice_id: str = None) -> bytes | None:
         """

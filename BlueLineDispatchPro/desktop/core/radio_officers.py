@@ -303,22 +303,36 @@ class RadioOfficerManager:
 
     # ── TTS playback ──────────────────────────────────────────────────────────
 
-    def _officer_squelch(self, callsign: str):
-        """Play a brief pitched tone before each officer transmission so the user
-        can immediately identify who is keying up — different pitch per unit."""
-        import sounddevice as sd
+    def _make_officer_click(self, callsign: str, release: bool = False) -> np.ndarray:
+        """
+        Build a PTT click for a specific officer.
+        Each callsign has a unique tone frequency mixed into bandpass noise
+        so listeners can immediately identify who is transmitting.
+        release=True → softer, slower-decay key-down version.
+        """
         from scipy import signal as sp_sig
+        freq = _OFFICER_SQUELCH_HZ.get(callsign, 750)
+        dur  = 0.10 if not release else 0.08
+        t    = np.linspace(0, dur, int(dur * self.SAMPLE_RATE), endpoint=False)
+        nyq  = self.SAMPLE_RATE / 2
+
+        # Bandpass noise body
+        noise = np.random.normal(0, 0.45, len(t)).astype(np.float32)
+        b, a  = sp_sig.butter(4, [380 / nyq, 3400 / nyq], btype="band")
+        noise = sp_sig.lfilter(b, a, noise).astype(np.float32)
+
+        # Officer ID tone + envelope
+        decay = 42 if not release else 26
+        env   = np.exp(-t * decay).astype(np.float32)
+        tone  = np.sin(2 * np.pi * freq * t).astype(np.float32) * env * 0.45
+        click = (noise * env + tone) * 0.70
+        return np.clip(click, -0.85, 0.85).astype(np.float32)
+
+    def _officer_squelch(self, callsign: str, release: bool = False):
+        """Play a PTT click for the given officer (key-up or key-down)."""
+        import sounddevice as sd
         try:
-            freq = _OFFICER_SQUELCH_HZ.get(callsign, 750)
-            dur  = 0.06
-            t    = np.linspace(0, dur, int(dur * self.SAMPLE_RATE), endpoint=False)
-            tone = np.sin(2 * np.pi * freq * t).astype(np.float32) * 0.30
-            tone *= np.exp(-t * 30).astype(np.float32)   # quick decay
-            noise = np.random.normal(0, 0.08, len(t)).astype(np.float32)
-            nyq = self.SAMPLE_RATE / 2
-            b, a = sp_sig.butter(4, [400 / nyq, 3200 / nyq], btype="band")
-            noise = sp_sig.lfilter(b, a, noise).astype(np.float32)
-            click = np.clip(tone + noise, -0.45, 0.45).astype(np.float32)
+            click = self._make_officer_click(callsign, release=release)
             sd.play(click, samplerate=self.SAMPLE_RATE, blocking=True)
         except Exception:
             pass
@@ -349,12 +363,12 @@ class RadioOfficerManager:
                 target_len = int(len(fx) * factor)
                 fx = sp_sig.resample(fx, target_len).astype(np.float32)
 
-            self._officer_squelch(cs)
+            self._officer_squelch(cs, release=False)                  # key-up
             sd.play(fx, samplerate=self.SAMPLE_RATE, blocking=True)
+            self._officer_squelch(cs, release=True)                   # key-down
         except Exception as e:
             logger.error(f"Officer speak: {e}")
         finally:
-            # Tail delay then re-enable mic (dispatch's _flush_queue handles the queue)
-            time.sleep(0.50)
+            time.sleep(0.45)
             if self.mic_suppressed is not None:
                 self.mic_suppressed.clear()
