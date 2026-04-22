@@ -73,15 +73,6 @@ _CHATTER_EVENTS = [
 _EVENT_LABELS   = [e[0] for e in _CHATTER_EVENTS]
 _EVENT_WEIGHTS  = [e[1] for e in _CHATTER_EVENTS]
 
-# Per-officer pitch factor (resample multiplier applied before playback).
-# > 1.0 → stretch audio → lower pitch.  < 1.0 → compress → higher pitch.
-# This makes officers distinguishable even when voice_id is not configured.
-_OFFICER_PITCH = {
-    "Sam-41":   1.10,   # deeper male voice
-    "Lincoln-9": 0.96,  # slightly higher male
-    "King-3":   0.88,   # notably higher — female officer
-}
-
 # Distinct squelch-click frequencies per unit (Hz).
 # Listeners learn to recognise each officer by their key-up tone.
 _OFFICER_SQUELCH_HZ = {
@@ -91,11 +82,31 @@ _OFFICER_SQUELCH_HZ = {
 }
 
 _DISPATCH_ACKS = {
-    "traffic_stop":  ["Copy {cs}, showing you 10-38.", "10-4 {cs}, 10-38 noted at your location."],
-    "clear":         ["10-4 {cs}, return to service.", "Copy {cs}, you're 10-8."],
-    "scene_arrival": ["10-4 {cs}, 10-23 noted.", "Copy {cs}, on scene."],
-    "patrol_obs":    ["10-4 {cs}. All units copy.", "Copy {cs}, units are advised."],
-    "request_info":  ["10-4 {cs}, stand by.", "Copy {cs}, checking that now."],
+    "traffic_stop":  [
+        "Copy {cs}, showing you 10-38 at your location. Running that plate now, stand by.",
+        "10-4 {cs}, 10-38 noted. I'll run that plate for you. Stand by one.",
+        "Copy {cs}, you're code 6 on that stop. Stand by for the return.",
+    ],
+    "clear":         [
+        "10-4 {cs}, showing you 10-8. You're available.",
+        "Copy {cs}, code 4. Return to service. I'll advise on any calls in your area.",
+        "10-4 {cs}, you're clear. Stand by for calls.",
+    ],
+    "scene_arrival": [
+        "Copy {cs}, 10-23 noted. Keep me advised. Backup is standing by if needed.",
+        "10-4 {cs}, you're on scene. I'll hold the channel. Advise when code 4.",
+        "Copy {cs}, on scene. Additional units are available. Keep the radio open.",
+    ],
+    "patrol_obs":    [
+        "10-4 {cs}. All units in the area — {cs} has a suspicious vehicle. Be advised.",
+        "Copy {cs}, noted. All units copy the observation. {cs}, keep me advised.",
+        "10-4 {cs}, I'll advise all units. Anyone in that area, assist {cs} as needed.",
+    ],
+    "request_info":  [
+        "Copy {cs}, I'll run that for you right now. Stand by for the return.",
+        "10-4 {cs}, checking that registration now. Stand by one.",
+        "Copy {cs}, querying that plate. Stand by.",
+    ],
 }
 
 
@@ -207,10 +218,12 @@ class RadioOfficerManager:
         if self.on_officer_speech:
             self.on_officer_speech(officer["callsign"], text)
 
-        time.sleep(random.uniform(0.7, 1.6))
-
+        # Natural radio gap between transmissions
+        time.sleep(random.uniform(1.0, 2.2))
         if self._paused:
             return
+
+        # Dispatch acknowledges with a substantive response
         ack_tmpl = random.choice(_DISPATCH_ACKS.get(event, ["10-4 {cs}."]))
         ack = ack_tmpl.format(cs=officer["callsign"])
         if self._dispatch_speak_fn:
@@ -218,6 +231,89 @@ class RadioOfficerManager:
                 self._dispatch_speak_fn(ack)
         if self.on_dispatch_ack:
             self.on_dispatch_ack(ack)
+
+        # For traffic stops and plate requests, continue into a full plate-return exchange
+        if event in ("traffic_stop", "request_info"):
+            threading.Thread(
+                target=self._do_plate_return_followup,
+                args=(officer,),
+                daemon=True,
+                name=f"plate_return_{officer['callsign']}",
+            ).start()
+
+    def _do_plate_return_followup(self, officer: dict):
+        """
+        Simulate the realistic 2-step plate-return exchange that happens after
+        every traffic stop: dispatch runs the plate, then reads back the result,
+        then the officer acknowledges.  Creates the multi-turn conversation the
+        player hears on a real scanner.
+        """
+        cs = officer["callsign"]
+
+        # Simulate the plate being run (realistic 5-10 second wait)
+        delay = random.uniform(5.0, 10.0)
+        step  = 0.2
+        for _ in range(int(delay / step)):
+            if not self._running or self._paused:
+                return
+            time.sleep(step)
+
+        if self._paused:
+            return
+
+        # Generate a realistic plate return
+        first_names = ["Michael", "James", "David", "Robert", "Sarah",
+                       "Maria", "John", "Lisa", "Anthony", "Karen"]
+        last_names  = ["Johnson", "Williams", "Brown", "Garcia",
+                       "Martinez", "Davis", "Wilson", "Anderson", "Taylor"]
+        plates      = ["4ABC123", "7XYZ891", "2DEF456", "9GHI234",
+                       "6JKL567", "3MNO890", "8PQR345", "1STU678"]
+        years       = list(range(2005, 2024))
+        makes       = ["Toyota", "Honda", "Ford", "Chevrolet",
+                       "Dodge", "Nissan", "Hyundai", "GMC"]
+
+        owner     = f"{random.choice(first_names)} {random.choice(last_names)}"
+        plate     = random.choice(plates)
+        year      = random.choice(years)
+        make      = random.choice(makes)
+        has_warrant = random.random() < 0.15   # 15 % chance — realistic hit rate
+
+        if has_warrant:
+            warrant_str = "ACTIVE FELONY WARRANT ON FILE. Use caution."
+        else:
+            warrant_str = "returns negative, no wants or warrants."
+
+        return_text = (
+            f"{cs}, 10-29 return on plate {plate} — "
+            f"registered to {owner}, {year} {make}. "
+            f"{warrant_str}"
+        )
+        logger.info(f"[DISPATCH→{cs}] plate return: {return_text!r}")
+        if self._dispatch_speak_fn:
+            with self._play_lock:
+                self._dispatch_speak_fn(return_text)
+        if self.on_dispatch_ack:
+            self.on_dispatch_ack(return_text)
+
+        # Officer confirms after hearing the return
+        time.sleep(random.uniform(1.2, 2.5))
+        if self._paused:
+            return
+
+        if has_warrant:
+            confirm = (
+                f"{cs}, copy — FELONY warrant. Requesting backup at my location. "
+                f"Detaining the subject now."
+            )
+        else:
+            confirm = (
+                f"{cs}, copy — 10-29 negative. Continuing the stop. Advise when complete."
+            )
+        logger.info(f"[{cs}] (plate confirm): {confirm!r}")
+        with self._play_lock:
+            self._speak_as_officer(officer, confirm)
+        if self.on_officer_speech:
+            self.on_officer_speech(cs, confirm)
 
     # ── GPT helpers ───────────────────────────────────────────────────────────
 
@@ -369,30 +465,10 @@ class RadioOfficerManager:
         except Exception:
             pass
 
-    # 7 % faster playback — same trick as dispatch: no processing artifacts,
-    # natural scanner pace without pitch-smearing time-stretch algorithms.
-    _PLAY_RATE = int(22050 * 1.07)
-
-    def _officer_breath(self) -> np.ndarray:
-        """
-        Subtle breath-intake played immediately after key-up, before speech.
-        Identical logic to the dispatcher breath but called on a per-officer basis
-        so each transmission has a slightly different duration (100-160 ms).
-        """
-        dur  = random.uniform(0.10, 0.16)
-        t    = np.linspace(0, dur, int(dur * self.SAMPLE_RATE), endpoint=False)
-        n    = np.random.normal(0, 0.045, len(t)).astype(np.float32)
-        from scipy import signal as _sp
-        nyq  = self.SAMPLE_RATE / 2
-        b, a = _sp.butter(2, [90 / nyq, 2000 / nyq], btype="band")
-        n    = _sp.lfilter(b, a, n).astype(np.float32)
-        env  = np.exp(-((t - dur * 0.40) ** 2) / (2 * (dur * 0.22) ** 2)).astype(np.float32)
-        return np.clip(n * env, -0.10, 0.10).astype(np.float32)
-
     def _speak_as_officer(self, officer: dict, text: str):
+        """Play officer TTS through radio FX at correct sample rate — no pitch shift, no speed tricks."""
         import io
         import sounddevice as sd
-        from scipy import signal as sp_sig
         cs = officer["callsign"]
         if self.mic_suppressed is not None:
             self.mic_suppressed.set()
@@ -405,23 +481,12 @@ class RadioOfficerManager:
                      .set_channels(1)
                      .set_frame_rate(self.SAMPLE_RATE)
                      .set_sample_width(2))
-            s = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
+            s  = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
+            fx = self._radio_fx(s, float(self._config.get("radio_intensity", 0.82)))
 
-            # ── Pitch shift on clean audio BEFORE radio FX ────────────────────
-            factor = float(officer.get("pitch", _OFFICER_PITCH.get(cs, 1.0)))
-            if abs(factor - 1.0) > 0.01:
-                target_len = int(len(s) * factor)
-                s = sp_sig.resample(s, target_len).astype(np.float32)
-
-            # ── Breath → 30 ms gap → speech, all through radio FX ─────────────
-            breath  = self._officer_breath()
-            silence = np.zeros(int(0.03 * self.SAMPLE_RATE), dtype=np.float32)
-            full    = np.concatenate([breath, silence, s])
-            fx      = self._radio_fx(full, float(self._config.get("radio_intensity", 0.82)))
-
-            self._officer_squelch(cs, release=False)                  # key-up
-            sd.play(fx, samplerate=self._PLAY_RATE, blocking=True)    # 7 % faster
-            self._officer_squelch(cs, release=True)                   # key-down
+            self._officer_squelch(cs, release=False)          # key-up click
+            sd.play(fx, samplerate=self.SAMPLE_RATE, blocking=True)
+            self._officer_squelch(cs, release=True)           # key-down click
         except Exception as e:
             logger.error(f"Officer speak: {e}")
         finally:

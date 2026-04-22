@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import queue
-import random
 import threading
 import time
 import wave
@@ -639,30 +638,8 @@ YOU ARE THE DISPATCHER ONLY. Never break character. Never acknowledge being AI."
     # Sentinel — passed to _tts_fishaudio by _speak() so it uses the configured dispatch voice
     _DISPATCH_VOICE_SENTINEL = "__dispatch__"
 
-    # Playback rate — 7 % above nominal: speeds up delivery without processing artifacts.
-    # At this small ratio the pitch shift (~1.1 semitones) is indistinguishable and
-    # actually mimics the slightly bright character of real radio voices.
-    _PLAY_RATE = int(SAMPLE_RATE * 1.07)
-
-    def _breath_sound(self) -> np.ndarray:
-        """
-        Subtle breath-intake played immediately after the key-up click.
-        Matches what you hear on real scanner recordings — a very soft inhale
-        in the ~100 ms before the officer starts speaking.
-        Duration is slightly randomised so transmissions never sound mechanical.
-        """
-        dur  = random.uniform(0.10, 0.16)
-        t    = np.linspace(0, dur, int(dur * SAMPLE_RATE), endpoint=False)
-        n    = np.random.normal(0, 0.045, len(t)).astype(np.float32)
-        nyq  = SAMPLE_RATE / 2
-        b, a = sp.butter(2, [90 / nyq, 2000 / nyq], btype="band")
-        n    = sp.lfilter(b, a, n).astype(np.float32)
-        # Gaussian envelope peaks at 40 % through the breath (inhale shape)
-        env  = np.exp(-((t - dur * 0.40) ** 2) / (2 * (dur * 0.22) ** 2)).astype(np.float32)
-        return np.clip(n * env, -0.10, 0.10).astype(np.float32)
-
     def _speak(self, text: str):
-        """Dispatch voice (ALLE). Suppresses mic for full duration to prevent bleed."""
+        """Dispatch voice (ALLE). Suppresses mic for full duration to prevent mic bleed."""
         intensity = float(self.config.get("radio_intensity", 0.82))
         self._mic_suppressed.set()
         try:
@@ -672,16 +649,10 @@ YOU ARE THE DISPATCHER ONLY. Never break character. Never acknowledge being AI."
             from pydub import AudioSegment
             audio = (AudioSegment.from_mp3(io.BytesIO(mp3_bytes))
                      .set_channels(1).set_frame_rate(SAMPLE_RATE).set_sample_width(2))
-            s = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
-
-            # Breath → 30 ms silence → speech, all run through radio FX as one block
-            breath  = self._breath_sound()
-            silence = np.zeros(int(0.03 * SAMPLE_RATE), dtype=np.float32)
-            full    = np.concatenate([breath, silence, s])
-            fx      = self._radio_fx(full, intensity)
-
+            s  = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
+            fx = self._radio_fx(s, intensity)
             self._squelch_click()
-            sd.play(fx, samplerate=self._PLAY_RATE, blocking=True)  # 7 % faster, zero artifacts
+            sd.play(fx, samplerate=SAMPLE_RATE, blocking=True)
             self._squelch_release()
         except Exception as e:
             logger.error(f"Speak: {e}")
@@ -741,37 +712,37 @@ YOU ARE THE DISPATCHER ONLY. Never break character. Never acknowledge being AI."
 
     def _radio_fx(self, samples: np.ndarray, intensity: float = 0.82) -> np.ndarray:
         """
-        Police radio audio chain — matches the real thing:
-          1. Pre-emphasis  — subtle high-freq boost (radio clarity / presence)
-          2. Bandpass      — 300-3400 Hz voice band, 6th-order steep rolloff
-          3. AGC           — normalise to consistent level before saturation
-          4. Warm sat.     — tanh soft saturation (not harsh clipping)
-          5. Noise floor   — low-level radio hiss under the voice
+        Police radio audio chain — clean, realistic processing.
+
+        Real police radio sounds like a filtered telephone with light compression
+        and subtle hiss. NOT heavily distorted or saturated.
+
+          1. Bandpass  — 300-3200 Hz telephone voice band, 4th-order Butterworth.
+                         4th-order has gentler rolloff than 6th — far less ringing
+                         on already-compressed MP3 audio.
+          2. Normalize — bring level to consistent headroom.
+          3. Soft clip — very gentle tanh (drive 1.3), barely audible warmth.
+          4. Noise     — subtle hiss floor (radio character, not static).
         """
         if intensity <= 0:
             return samples
-        s = samples.astype(np.float64)
+        s   = samples.astype(np.float64)
         nyq = SAMPLE_RATE / 2
 
-        # 1. Pre-emphasis: first-order high-shelf boost for radio presence
-        #    Equivalent to a 6 dB/oct rise above ~1 kHz, then filtered back
-        b_pre = np.array([1.0, -0.82])
-        s = sp.lfilter(b_pre, [1.0], s)
+        # 1. Bandpass — 4th-order, telephone voice band
+        b, a = sp.butter(4, [300 / nyq, 3200 / nyq], btype="band")
+        s    = sp.lfilter(b, a, s)
 
-        # 2. Bandpass — 6th-order Butterworth, steep skirts like a real radio
-        b, a = sp.butter(6, [290 / nyq, 3500 / nyq], btype="band")
-        s = sp.lfilter(b, a, s)
-
-        # 3. AGC — normalize to 85 % headroom before saturation
+        # 2. Normalize to consistent level
         peak = np.max(np.abs(s)) + 1e-9
-        s = s / peak * 0.85
+        s    = s / peak * 0.80
 
-        # 4. Warm tanh saturation — models the analogue compression of a radio
-        drive = 2.8
-        s = np.tanh(s * drive) / np.tanh(np.array([drive]))[0] * 0.82
+        # 3. Very gentle soft limiter — just takes the edge off peaks
+        drive = 1.3
+        s     = np.tanh(s * drive) / np.tanh(np.array([drive]))[0] * 0.80
 
-        # 5. Low-level noise floor (radio hiss) — scales with intensity slider
-        s += np.random.normal(0, 0.007 * intensity, len(s))
+        # 4. Subtle noise floor — radio hiss, not static
+        s += np.random.normal(0, 0.003 * intensity, len(s))
 
         return np.clip(s, -1.0, 1.0).astype(np.float32)
 
