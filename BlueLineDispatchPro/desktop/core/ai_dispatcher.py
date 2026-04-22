@@ -86,6 +86,18 @@ class AIDispatcher:
         # Cache last plate result so ID checks return the same person
         self._last_plate_data: dict = {}
 
+        # AI officer unit roster — other units on the radio channel
+        from core.radio_officers import RadioOfficerManager
+        self._officers = RadioOfficerManager(
+            config=config,
+            tts_fn=self._tts_with_voice,
+            radio_fx_fn=self._radio_fx,
+            openai_client=self._openai,
+        )
+        self._officers.set_dispatch_speak(self._speak)
+        self._officers.on_officer_speech  = self._on_officer_chatter
+        self._officers.on_dispatch_ack    = self._on_dispatch_ack
+
     # ── Vosk ──────────────────────────────────────────────────────────────────
 
     def _load_vosk(self):
@@ -109,6 +121,7 @@ class AIDispatcher:
         self._calibrate_mic()
         threading.Thread(target=self._main_loop, daemon=True,
                          name="dispatcher").start()
+        self._officers.start()
         logger.info(f"AIDispatcher started — listening for '{self.callsign}'")
 
     def _calibrate_mic(self):
@@ -152,9 +165,22 @@ class AIDispatcher:
 
     def stop(self):
         self._running = False
+        self._officers.stop()
         if self._stream:
             self._stream.stop()
             self._stream.close()
+
+    # ── Officer chatter callbacks ─────────────────────────────────────────────
+
+    def _on_officer_chatter(self, callsign: str, text: str):
+        """Forwarded to UI for display."""
+        if self.on_user_speech:   # reuse UI hook to show in log (prefixed with callsign)
+            pass  # UI wires this separately if desired
+        logger.info(f"[{callsign}]: {text!r}")
+
+    def _on_dispatch_ack(self, text: str):
+        if self.on_dispatcher_speech:
+            self.on_dispatcher_speech(text)
 
     def manual_trigger(self):
         """Button fallback — open a session as if callsign was heard."""
@@ -217,6 +243,16 @@ class AIDispatcher:
 
     # ── Session — full conversation loop ──────────────────────────────────────
 
+    _BACKUP_PHRASES = [
+        "additional unit", "backup", "10-33", "10-78", "assistance",
+        "roll a unit", "send a unit", "need help", "officer down",
+        "code 3", "respond to", "another unit",
+    ]
+
+    def _is_backup_request(self, text: str) -> bool:
+        t = text.lower()
+        return any(p in t for p in self._BACKUP_PHRASES)
+
     def _run_session(self):
         """
         Opens a radio channel. Acknowledges, then loops:
@@ -224,6 +260,7 @@ class AIDispatcher:
         until SESSION_TIMEOUT seconds of silence, then returns to idle.
         """
         self._in_session = True
+        self._officers.pause()    # freeze background chatter while player talks
         try:
             # Opening acknowledgment
             ack = f"{self.callsign}, go ahead."
@@ -272,6 +309,25 @@ class AIDispatcher:
                     self.on_dispatcher_speech(ai_text)
                 self._speak(ai_text)
 
+                # ── Post-dispatch follow-ups ──────────────────────────────────
+                # 1. Backup request → have the assigned unit confirm over radio
+                if self._is_backup_request(text):
+                    named = self._officers.detect_named_officer(text)
+                    assigned = named or self._officers.random_callsign()
+                    threading.Thread(
+                        target=self._officers.officer_confirm_backup,
+                        args=(assigned, 2.0),
+                        daemon=True,
+                    ).start()
+
+                # 2. Player addressed a specific officer → that officer replies
+                elif self._officers.detect_named_officer(text):
+                    threading.Thread(
+                        target=self._officers.handle_player_address,
+                        args=(text,),
+                        daemon=True,
+                    ).start()
+
                 # Close session if officer signed off
                 if self._is_closing_transmission(text):
                     logger.info("Officer went clear — closing session")
@@ -283,6 +339,7 @@ class AIDispatcher:
                 self.on_error(str(e))
         finally:
             self._in_session = False
+            self._officers.resume()   # let background chatter resume
             self._set_state("idle")
             self._flush_queue()
 
@@ -387,38 +444,42 @@ class AIDispatcher:
 
     def _system_prompt(self) -> str:
         cs = self.callsign
+        # Build unit roster string so dispatch can reference them by name
+        unit_list = ", ".join(self._officers.officers.keys()) if self._officers.officers else "Sam-41, Lincoln-9, King-3"
         return f"""You are a police radio dispatcher for {self.agency}. \
-You are talking to unit {cs} over the radio.
+You are talking to officer {cs} over the radio channel.
+
+OTHER UNITS ON THIS CHANNEL: {unit_list}
+You may direct any of them to assist {cs} when backup is requested. \
+Reference them by callsign. Example: "Sam-41, respond to {cs}'s location."
 
 VOICE AND TONE:
-You are calm, clipped, and professional. Real dispatchers do not have warm personalities \
-on the radio — they are efficient and precise. No "stay safe", no "always here for you", \
-no emotional language. Short sentences. Radio cadence.
+Calm, clipped, professional. Real dispatchers are efficient and precise. \
+No "stay safe", no warm language, no emotional filler. Short sentences. Radio cadence.
 
 RESPONSE LENGTH:
 1 to 2 sentences maximum. Under 20 words preferred. Never more than 35 words.
 
-10-CODES TO USE NATURALLY:
-10-4 (copy/acknowledged), 10-8 (in service/available), 10-23 (arrived on scene), \
-10-38 (traffic stop), 10-33 (emergency/officer needs help), 10-78 (need assistance), \
-10-22 (disregard), 10-20 (location), 10-29 (check for wants/warrants).
+10-CODES:
+10-4 (copy), 10-8 (available), 10-23 (on scene), 10-38 (traffic stop), \
+10-33 (officer needs help), 10-78 (need assistance), 10-22 (disregard), \
+10-20 (location), 10-29 (wants/warrants), 10-76 (en route).
 
 PLATE AND ID RUNS:
-When plate or ID data is provided in a system message, read ONLY that data back.
-Do NOT invent names, vehicles, or statuses. Use EXACTLY what is in the data block.
-If no data block is present for a plate/ID run, say "Stand by, checking that now."
+When data is in a system message, read ONLY that data. Do NOT invent anything.
+If no data block present, say "Stand by, checking that now."
 
 COMMON RESPONSES:
-- Traffic stop: "Copy {cs}, showing you 10-38 at [location they gave or 'your location']."
-- On scene / arrived / 10-23: "Copy {cs}, showing you 10-23."
-- Backup / 10-33: "All units, 10-33 at {cs}'s location. Respond code 3."
-- Pursuit: "Copy {cs}, broadcasting pursuit. Air support notified. Spike strips authorized."
+- Traffic stop: "Copy {cs}, showing you 10-38 at [location]."
+- On scene: "Copy {cs}, showing you 10-23."
+- Backup / 10-33: "All units, 10-33 at {cs}'s location. [Unit callsign], respond code 3."
+- Pursuit: "Copy {cs}, broadcasting pursuit. Air support notified."
 - Shots fired: "Copy {cs}. EMS and supervisors en route. Additional units responding."
-- Code 4 / going clear / 10-8: "Copy {cs}, return to service." (nothing more)
+- Code 4 / clear: "Copy {cs}, return to service."
 - Can't understand: "Say again {cs}?"
-- Non-police statements or random words: respond only "10-4." and nothing else.
+- Random / off-topic: respond only "10-4." and nothing else.
 
-YOU ARE THE DISPATCHER. Never break character. Never acknowledge being an AI."""
+YOU ARE THE DISPATCHER ONLY. Never break character. Never say you are an AI."""
 
     def _get_ai_response(self, user_text: str) -> str:
         from core.plate_checker import is_plate_request, is_id_request, extract_plate
@@ -480,31 +541,57 @@ YOU ARE THE DISPATCHER. Never break character. Never acknowledge being an AI."""
 
     # ── TTS + Radio FX ────────────────────────────────────────────────────────
 
-    def _speak(self, text: str):
+    def _squelch_click(self):
+        """Play a brief radio squelch/key click before transmissions."""
+        try:
+            dur = 0.07   # seconds
+            t   = np.linspace(0, dur, int(dur * SAMPLE_RATE), endpoint=False)
+            n   = np.random.normal(0, 0.25, len(t)).astype(np.float32)
+            nyq = SAMPLE_RATE / 2
+            b, a = sp.butter(4, [500 / nyq, 2800 / nyq], btype="band")
+            n = sp.lfilter(b, a, n).astype(np.float32)
+            n *= np.exp(-t * 35).astype(np.float32)   # fast decay
+            sd.play(np.clip(n, -0.4, 0.4), samplerate=SAMPLE_RATE, blocking=True)
+        except Exception:
+            pass
+
+    def _speak(self, text: str, voice_id: str = None):
         """TTS → radio FX → play (blocking). Provider selected by config."""
         intensity = float(self.config.get("radio_intensity", 0.82))
-        provider  = self.config.get("tts_provider", "fishaudio").lower()
         try:
-            mp3_bytes = (self._tts_fishaudio(text) if provider == "fishaudio"
-                         else self._tts_elevenlabs(text))
+            mp3_bytes = self._tts_with_voice(text, voice_id=voice_id)
             if not mp3_bytes:
                 return
             from pydub import AudioSegment
             audio = (AudioSegment.from_mp3(io.BytesIO(mp3_bytes))
                      .set_channels(1).set_frame_rate(SAMPLE_RATE).set_sample_width(2))
             s = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
+            self._squelch_click()
             sd.play(self._radio_fx(s, intensity), samplerate=SAMPLE_RATE, blocking=True)
         except Exception as e:
             logger.error(f"Speak: {e}")
 
-    def _tts_fishaudio(self, text: str) -> bytes | None:
+    def _tts_with_voice(self, text: str, voice_id: str = None) -> bytes | None:
+        """
+        Unified TTS entry point. voice_id overrides the dispatch voice.
+        Used by RadioOfficerManager to give each officer their own Fish Audio voice.
+        Falls back to ElevenLabs if Fish Audio is not configured.
+        """
+        provider = self.config.get("tts_provider", "fishaudio").lower()
+        if provider == "fishaudio":
+            return self._tts_fishaudio(text, voice_id=voice_id)
+        return self._tts_elevenlabs(text)
+
+    def _tts_fishaudio(self, text: str, voice_id: str = None) -> bytes | None:
         try:
             from fishaudio import FishAudio
             client = FishAudio(api_key=self.config["fishaudio_api_key"])
-            voice_id = self.config.get("fishaudio_voice_id") or None
+            # Officer voice_id overrides dispatch voice; None = Fish Audio default
+            ref_id = voice_id if voice_id is not None else (
+                self.config.get("fishaudio_voice_id") or None)
             return client.tts.convert(
                 text=text,
-                reference_id=voice_id,
+                reference_id=ref_id,
                 latency="balanced",
                 format="mp3",
             )
