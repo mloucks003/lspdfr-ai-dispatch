@@ -73,6 +73,23 @@ _CHATTER_EVENTS = [
 _EVENT_LABELS   = [e[0] for e in _CHATTER_EVENTS]
 _EVENT_WEIGHTS  = [e[1] for e in _CHATTER_EVENTS]
 
+# Per-officer pitch factor (resample multiplier applied before playback).
+# > 1.0 → stretch audio → lower pitch.  < 1.0 → compress → higher pitch.
+# This makes officers distinguishable even when voice_id is not configured.
+_OFFICER_PITCH = {
+    "Sam-41":   1.10,   # deeper male voice
+    "Lincoln-9": 0.96,  # slightly higher male
+    "King-3":   0.88,   # notably higher — female officer
+}
+
+# Distinct squelch-click frequencies per unit (Hz).
+# Listeners learn to recognise each officer by their key-up tone.
+_OFFICER_SQUELCH_HZ = {
+    "Sam-41":    680,
+    "Lincoln-9": 820,
+    "King-3":    960,
+}
+
 _DISPATCH_ACKS = {
     "traffic_stop":  ["Copy {cs}, showing you 10-38.", "10-4 {cs}, 10-38 noted at your location."],
     "clear":         ["10-4 {cs}, return to service.", "Copy {cs}, you're 10-8."],
@@ -281,9 +298,31 @@ class RadioOfficerManager:
 
     # ── TTS playback ──────────────────────────────────────────────────────────
 
+    def _officer_squelch(self, callsign: str):
+        """Play a brief pitched tone before each officer transmission so the user
+        can immediately identify who is keying up — different pitch per unit."""
+        import sounddevice as sd
+        from scipy import signal as sp_sig
+        try:
+            freq = _OFFICER_SQUELCH_HZ.get(callsign, 750)
+            dur  = 0.06
+            t    = np.linspace(0, dur, int(dur * self.SAMPLE_RATE), endpoint=False)
+            tone = np.sin(2 * np.pi * freq * t).astype(np.float32) * 0.30
+            tone *= np.exp(-t * 30).astype(np.float32)   # quick decay
+            noise = np.random.normal(0, 0.08, len(t)).astype(np.float32)
+            nyq = self.SAMPLE_RATE / 2
+            b, a = sp_sig.butter(4, [400 / nyq, 3200 / nyq], btype="band")
+            noise = sp_sig.lfilter(b, a, noise).astype(np.float32)
+            click = np.clip(tone + noise, -0.45, 0.45).astype(np.float32)
+            sd.play(click, samplerate=self.SAMPLE_RATE, blocking=True)
+        except Exception:
+            pass
+
     def _speak_as_officer(self, officer: dict, text: str):
         import io
         import sounddevice as sd
+        from scipy import signal as sp_sig
+        cs = officer["callsign"]
         try:
             mp3 = self._tts(text, officer.get("voice_id"))
             if not mp3:
@@ -293,8 +332,16 @@ class RadioOfficerManager:
                      .set_channels(1)
                      .set_frame_rate(self.SAMPLE_RATE)
                      .set_sample_width(2))
-            s   = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
-            fx  = self._radio_fx(s, float(self._config.get("radio_intensity", 0.82)))
+            s  = np.array(audio.get_array_of_samples(), dtype=np.float32) / 32768.0
+            fx = self._radio_fx(s, float(self._config.get("radio_intensity", 0.82)))
+
+            # ── Pitch shift: resample to change perceived vocal pitch ──────────
+            factor = float(officer.get("pitch", _OFFICER_PITCH.get(cs, 1.0)))
+            if abs(factor - 1.0) > 0.01:
+                target_len = int(len(fx) * factor)
+                fx = sp_sig.resample(fx, target_len).astype(np.float32)
+
+            self._officer_squelch(cs)
             sd.play(fx, samplerate=self.SAMPLE_RATE, blocking=True)
         except Exception as e:
             logger.error(f"Officer speak: {e}")

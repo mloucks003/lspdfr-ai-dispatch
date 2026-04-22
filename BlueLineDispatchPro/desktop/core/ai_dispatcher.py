@@ -555,11 +555,15 @@ YOU ARE THE DISPATCHER ONLY. Never break character. Never say you are an AI."""
         except Exception:
             pass
 
-    def _speak(self, text: str, voice_id: str = None):
-        """TTS → radio FX → play (blocking). Provider selected by config."""
+    # Sentinel — passed to _tts_fishaudio by _speak() so it uses the configured dispatch voice
+    _DISPATCH_VOICE_SENTINEL = "__dispatch__"
+
+    def _speak(self, text: str):
+        """Dispatch voice (ALLE) only. Always uses the configured dispatch voice ID."""
         intensity = float(self.config.get("radio_intensity", 0.82))
         try:
-            mp3_bytes = self._tts_with_voice(text, voice_id=voice_id)
+            # Explicitly request the dispatch voice — never fall through to any other default
+            mp3_bytes = self._tts_fishaudio(text, self._DISPATCH_VOICE_SENTINEL)
             if not mp3_bytes:
                 return
             from pydub import AudioSegment
@@ -573,22 +577,26 @@ YOU ARE THE DISPATCHER ONLY. Never break character. Never say you are an AI."""
 
     def _tts_with_voice(self, text: str, voice_id: str = None) -> bytes | None:
         """
-        Unified TTS entry point. voice_id overrides the dispatch voice.
-        Used by RadioOfficerManager to give each officer their own Fish Audio voice.
-        Falls back to ElevenLabs if Fish Audio is not configured.
+        Used by RadioOfficerManager for officer voices.
+        voice_id = None   → Fish Audio platform default (NOT ALLE — different voice)
+        voice_id = "abc"  → specific Fish Audio reference voice
         """
         provider = self.config.get("tts_provider", "fishaudio").lower()
         if provider == "fishaudio":
-            return self._tts_fishaudio(text, voice_id=voice_id)
+            return self._tts_fishaudio(text, voice_id)   # None stays None
         return self._tts_elevenlabs(text)
 
     def _tts_fishaudio(self, text: str, voice_id: str = None) -> bytes | None:
         try:
             from fishaudio import FishAudio
             client = FishAudio(api_key=self.config["fishaudio_api_key"])
-            # Officer voice_id overrides dispatch voice; None = Fish Audio default
-            ref_id = voice_id if voice_id is not None else (
-                self.config.get("fishaudio_voice_id") or None)
+            # Sentinel → dispatch configured voice (ALLE)
+            # Specific string → that exact voice
+            # None → Fish Audio platform default (sounds different from ALLE)
+            if voice_id == self._DISPATCH_VOICE_SENTINEL:
+                ref_id = self.config.get("fishaudio_voice_id") or None
+            else:
+                ref_id = voice_id   # could be None (platform default) or a real ID
             return client.tts.convert(
                 text=text,
                 reference_id=ref_id,
